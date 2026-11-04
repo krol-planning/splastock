@@ -1,0 +1,146 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ストック制スプラ</title>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #201a36;
+      color: white;
+      text-align: center;
+      padding: 40px 16px;
+    }
+
+    .container {
+      max-width: 400px;
+      margin: auto;
+      background: #342b4f;
+      padding: 25px;
+      border-radius: 16px;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+
+    #stock {
+      font-size: 64px;
+      font-weight: bold;
+      color: #c5ff65;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>ストック制スプラ</h1>
+    <p>使用するブキを選択してください</p>
+
+    <input id="weapon" list="weapons" placeholder="ブキ名を入力または選択" oninput="showStock()" autocomplete="off">
+    <datalist id="weapons"></datalist>
+
+    <h3>ストック数</h3>
+    <div id="stock">-</div>
+  </div>
+
+  <script>
+        const weapons = {
+        "ボールドマーカー":6,
+        "パブロ":6,
+        "わかばシューター":5,
+        "プロモデラーMG":5,
+        "スプラシューター":5,
+        "シャープマーカー":5,
+        "N-ZAP85":5,
+        "ノヴァブラスター":5,
+        "クラッシュブラスター":5,
+        "スパッタリー":5,
+        "スプラマニューバー": 5,
+        "クアッドホッパーブラック":5,
+        "カーボンローラー":5,
+        "スプラローラー":5,
+        "スパイガジェット":5,
+        "ヒッセン":5,
+        "ホクサイ":5,
+        "L3リールガン":4,
+        "52ガロン":4,
+        "スペースシューター":4,
+        "ホットブラスター":4,
+        "ワイドローラー":4,
+        "24式張替傘・乙":4,
+        "パラシェルター":4,
+        "スプラスピナー":4,
+        "フィンセント":4,
+        "LACT-450":4,
+        "ドライブワイパー":4,
+        "デンタルワイパー":4,
+        "プライムシューター":3,
+        "ボトルガイザー":3,
+        "96ガロン":3,
+        "H3リールガン":3,
+        "ラピッドブラスター":3,
+        "ロングブラスター":3,
+        "S-brast92":3,
+        "デュアルスイーパー":3,
+        "ケルビン525":3,
+        "ガエンFF":3,
+        "ヴァリアブルローラー":3,
+        "ダイナモローラー":3,
+        "ソイチューバー":3,
+        "14式竹筒銃・甲":3,
+        "スクイックリン":3,
+        "キャンピングシェルター":3,
+        "イグザミナ－":3,
+        "バケットスロッシャー":3,
+        "スクリュースロッシャー":3,
+        "モップリン":3,
+        "オーバーフロッシャー":3,
+        "ノーチラス47":3,
+        "ジムワイパー":3,
+        "ジェットスイーパー":2,
+        "Rブラスターエリートデコ": 2,      
+        "リッター4K": 2,
+        "リッター4kスコープ": 2,
+        "スプラチャージャー": 2,
+        "スプラチャージャースコープ": 2,
+        "R-PEN/5H": 2,
+        "エクスプロッシャー": 2,
+        "ハイドラント": 2,
+        "クーゲルシュライバー": 2,
+        "バレルスピナー": 2,
+        "フルイドⅤ": 2,
+        "トライストリンガー": 2
+    };
+
+    // 入力候補にブキを追加
+    const weaponInput = document.getElementById("weapon");
+    const weaponOptions = document.getElementById("weapons");
+
+    Object.keys(weapons).forEach(name => {
+      const option = document.createElement("option");
+      option.value = name;
+      weaponOptions.appendChild(option);
+    });
+
+    // 選択したブキのストック数を表示
+    function showStock() {
+      const weapon = weaponInput.value;
+      const stock = weapons[weapon];
+
+      document.getElementById("stock").textContent =
+        stock ?? "-";
+    }
+  </script>
+</body>
+</html>
+
+
