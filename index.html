@@ -23,12 +23,71 @@
       border-radius: 16px;
     }
 
+    .tier-list-image {
+      display: block;
+      width: 100%;
+      max-width: 1140px;
+      height: auto;
+      margin: 0 auto 24px;
+    }
+
     input {
       width: 100%;
       padding: 12px;
       font-size: 16px;
       border-radius: 8px;
       box-sizing: border-box;
+    }
+
+    .weapon-controls {
+      display: flex;
+      align-items: flex-end;
+      gap: 12px;
+    }
+
+    .weapon-controls input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .death-counter {
+      flex: 0 0 auto;
+    }
+
+    .death-counter label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+
+    .death-counter-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .death-counter button {
+      width: 32px;
+      height: 42px;
+      border: 0;
+      border-radius: 8px;
+      background: #c5ff65;
+      color: #201a36;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .death-counter .death-counter-reset {
+      width: 100%;
+      height: 30px;
+      margin-top: 6px;
+      font-size: 13px;
+    }
+
+    #deaths {
+      min-width: 24px;
+      font-size: 20px;
+      font-weight: bold;
     }
 
     #stock {
@@ -41,11 +100,24 @@
 </head>
 
 <body>
+  <img class="tier-list-image" src="tierlist%20(3).png" alt="ブキのストック数別ティア表">
+
   <div class="container">
     <h1>ストック制スプラ</h1>
     <p>使用するブキを選択してください</p>
 
-    <input id="weapon" list="weapons" placeholder="ブキ名を入力または選択" oninput="showStock()" autocomplete="off">
+    <div class="weapon-controls">
+      <input id="weapon" list="weapons" placeholder="ブキ名を入力または選択" oninput="showStock()" autocomplete="off">
+      <div class="death-counter">
+        <label>デス数</label>
+        <div class="death-counter-controls">
+          <button type="button" aria-label="デス数を1減らす" onclick="changeDeaths(-1)">−</button>
+          <output id="deaths" aria-live="polite">0</output>
+          <button type="button" aria-label="デス数を1増やす" onclick="changeDeaths(1)">+</button>
+        </div>
+        <button class="death-counter-reset" type="button" onclick="resetDeaths()">リセット</button>
+      </div>
+    </div>
     <datalist id="weapons"></datalist>
 
     <h3>ストック数</h3>
@@ -139,8 +211,18 @@
       document.getElementById("stock").textContent =
         stock ?? "-";
     }
+
+    let deaths = 0;
+
+    function changeDeaths(amount) {
+      deaths = Math.max(0, deaths + amount);
+      document.getElementById("deaths").textContent = deaths;
+    }
+
+    function resetDeaths() {
+      deaths = 0;
+      document.getElementById("deaths").textContent = deaths;
+    }
   </script>
 </body>
 </html>
-
-
