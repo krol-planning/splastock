@@ -1,228 +1,74 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#201a36">
   <title>ストック制スプラ</title>
-
   <style>
-    body {
-      font-family: sans-serif;
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       background: #201a36;
-      color: white;
-      text-align: center;
-      padding: 40px 16px;
+      color: #fff;
     }
-
-    .container {
-      max-width: 400px;
-      margin: auto;
-      background: #342b4f;
-      padding: 25px;
-      border-radius: 16px;
-    }
-
-    .tier-list-image {
-      display: block;
-      width: 100%;
-      max-width: 1140px;
-      height: auto;
-      margin: 0 auto 24px;
-    }
-
-    input {
-      width: 100%;
-      padding: 12px;
-      font-size: 16px;
-      border-radius: 8px;
-      box-sizing: border-box;
-    }
-
-    .weapon-controls {
-      display: flex;
-      align-items: flex-end;
-      gap: 12px;
-    }
-
-    .weapon-controls input {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .death-counter {
-      flex: 0 0 auto;
-    }
-
-    .death-counter label {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 14px;
-    }
-
-    .death-counter-controls {
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    .site-header {
+      min-height: 64px;
+      padding: 12px max(20px, calc((100% - 1120px) / 2));
       display: flex;
       align-items: center;
-      gap: 4px;
+      justify-content: space-between;
+      gap: 16px;
+      background: #2b2341;
     }
-
-    .death-counter button {
-      width: 32px;
-      height: 42px;
-      border: 0;
-      border-radius: 8px;
+    .brand { color: #c5ff65; font-weight: 800; text-decoration: none; }
+    #header-right { display: flex; align-items: center; gap: 12px; }
+    #app { min-height: calc(100vh - 64px); }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .toast { display: none; }
+    .toast.active {
+      display: block;
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 10;
+      max-width: min(440px, calc(100vw - 32px));
+      padding: 12px 16px;
+      border-radius: 10px;
       background: #c5ff65;
       color: #201a36;
-      font-size: 20px;
-      cursor: pointer;
     }
-
-    .death-counter .death-counter-reset {
-      width: 100%;
-      height: 30px;
-      margin-top: 6px;
-      font-size: 13px;
+    .toast.error { background: #ff99b9; }
+    dialog {
+      width: min(520px, calc(100% - 32px));
+      border: 1px solid #625878;
+      border-radius: 16px;
+      background: #342b4f;
+      color: inherit;
     }
-
-    #deaths {
-      min-width: 24px;
-      font-size: 20px;
-      font-weight: bold;
-    }
-
-    #stock {
-      font-size: 64px;
-      font-weight: bold;
-      color: #c5ff65;
-      margin: 20px 0;
-    }
+    dialog::backdrop { background: #100d1ccc; }
+    #confirm-body { margin-bottom: 20px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
   </style>
 </head>
-
 <body>
-  <img class="tier-list-image" src="tierlist%20(4).png" alt="ブキのストック数別ティア表">
-
-  <div class="container">
-    <h1>ストック制スプラ</h1>
-    <p>使用するブキを選択してください</p>
-
-    <div class="weapon-controls">
-      <input id="weapon" list="weapons" placeholder="ブキ名を入力または選択" oninput="showStock()" autocomplete="off">
-      <div class="death-counter">
-        <label>デス数</label>
-        <div class="death-counter-controls">
-          <button type="button" aria-label="デス数を1減らす" onclick="changeDeaths(-1)">−</button>
-          <output id="deaths" aria-live="polite">0</output>
-          <button type="button" aria-label="デス数を1増やす" onclick="changeDeaths(1)">+</button>
-        </div>
-        <button class="death-counter-reset" type="button" onclick="resetDeaths()">リセット</button>
-      </div>
-    </div>
-    <datalist id="weapons"></datalist>
-
-    <h3>ストック数</h3>
-    <div id="stock">-</div>
-  </div>
-
-  <script>
-        const weapons = {
-        "ボールドマーカー":5,
-        "パブロ":5,
-        "わかばシューター":4,
-        "プロモデラーMG":5,
-        "スプラシューター":3,
-        "シャープマーカー":4,
-        "N-ZAP85":5,
-        "ノヴァブラスター":5,
-        "クラッシュブラスター":5,
-        "スパッタリー":5,
-        "スプラマニューバー": 5,
-        "クアッドホッパーブラック":5,
-        "カーボンローラー":5,
-        "スプラローラー":5,
-        "スパイガジェット":5,
-        "ヒッセン":4,
-        "ホクサイ":4,
-        "L3リールガン":4,
-        "52ガロン":4,
-        "スペースシューター":4,
-        "ホットブラスター":4,
-        "ワイドローラー":3,
-        "24式張替傘・乙":4,
-        "パラシェルター":4,
-        "スプラスピナー":4,
-        "フィンセント":4,
-        "LACT-450":4,
-        "ドライブワイパー":4,
-        "デンタルワイパー":4,
-        "プライムシューター":3,
-        "ボトルガイザー":3,
-        "96ガロン":3,
-        "H3リールガン":3,
-        "ラピッドブラスター":3,
-        "ロングブラスター":3,
-        "S-brast92":3,
-        "デュアルスイーパー":3,
-        "ケルビン525":3,
-        "ガエンFF":3,
-        "ヴァリアブルローラー":3,
-        "ダイナモローラー":3,
-        "ソイチューバー":3,
-        "14式竹筒銃・甲":3,
-        "スクイックリン":3,
-        "キャンピングシェルター":3,
-        "イグザミナ－":3,
-        "バケットスロッシャー":3,
-        "スクリュースロッシャー":3,
-        "モップリン":3,
-        "オーバーフロッシャー":3,
-        "ノーチラス47":3,
-        "ジムワイパー":3,
-        "ジェットスイーパー":2,
-        "Rブラスターエリートデコ": 2,      
-        "リッター4K": 2,
-        "リッター4kスコープ": 2,
-        "スプラチャージャー": 2,
-        "スプラチャージャースコープ": 2,
-        "R-PEN/5H": 2,
-        "エクスプロッシャー": 2,
-        "ハイドラント": 2,
-        "クーゲルシュライバー": 2,
-        "バレルスピナー": 2,
-        "フルイドⅤ": 3,
-        "トライストリンガー": 2
-    };
-
-    // 入力候補にブキを追加
-    const weaponInput = document.getElementById("weapon");
-    const weaponOptions = document.getElementById("weapons");
-
-    Object.keys(weapons).forEach(name => {
-      const option = document.createElement("option");
-      option.value = name;
-      weaponOptions.appendChild(option);
-    });
-
-    // 選択したブキのストック数を表示
-    function showStock() {
-      const weapon = weaponInput.value;
-      const stock = weapons[weapon];
-
-      document.getElementById("stock").textContent =
-        stock ?? "-";
-    }
-
-    let deaths = 0;
-
-    function changeDeaths(amount) {
-      deaths = Math.max(0, deaths + amount);
-      document.getElementById("deaths").textContent = deaths;
-    }
-
-    function resetDeaths() {
-      deaths = 0;
-      document.getElementById("deaths").textContent = deaths;
-    }
-  </script>
+  <header class="site-header">
+    <a class="brand" href="./">SPLASTOCK</a>
+    <div id="header-right"></div>
+  </header>
+  <main id="app" aria-live="polite"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="confirm-dialog">
+    <div id="confirm-body"></div>
+    <form method="dialog" class="dialog-actions">
+      <button class="btn btn-ghost" value="cancel">キャンセル</button>
+      <button class="btn btn-accent" value="confirm">確認</button>
+    </form>
+  </dialog>
+  <script src="./config.js"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>
