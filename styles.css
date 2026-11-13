@@ -3,3 +3,42 @@
 @media(max-width:900px){.banner-hero{grid-template-columns:1fr}.hero-visual{min-height:150px}.grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-aside,.control-grid,.quick-layout{grid-template-columns:1fr}.control-grid>.personal-card{max-width:640px}.scoreboard{grid-template-columns:1fr 1fr}}
 @media(max-width:640px){.shell{padding-left:14px;padding-right:14px}.header-inner{padding:0 14px;height:58px}.site-header{min-height:59px}.brand{font-size:14px}.brand-symbol{width:28px;height:28px}.profile-pill .text-clip{display:none}.profile-pill{padding:4px}.connection{font-size:10px}.main{padding-top:22px;padding-bottom:40px}.banner-hero{padding:25px 21px;gap:18px}.hero-visual{display:none}.grid-2,.grid-3,.scoreboard{grid-template-columns:1fr}.panel-pad{padding:18px}.metric{padding:11px 12px}.metric-value{font-size:23px}.stats{gap:6px}.dual-board{top:62px;gap:5px;padding:10px;border-radius:12px}.duel-stock{font-size:29px}.duel-stock small{font-size:9px}.duel-team{font-size:10px}.btn-death{height:80px}.roster-edit-grid{grid-template-columns:1fr 1fr}.footer-inner{font-size:10px}.quick-tiers .tier-card{padding:14px}.admin-slot{flex-wrap:wrap}.admin-slot .actions{width:100%;margin-left:0}.pick-grid{grid-template-columns:repeat(4,1fr)}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
+
+/* Admin-only V3 virtual 8-player test console */
+.test-check{display:flex;align-items:flex-start;gap:12px;cursor:pointer;padding:15px;border:1px solid var(--line);border-radius:12px;background:var(--soft);margin:18px 0}
+.test-check input{width:18px;height:18px;accent-color:#111317;margin:2px 0 0;flex:0 0 18px}
+.test-check span{display:grid;gap:4px}.test-check small{color:var(--sub);line-height:1.5}
+.test-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:18px;flex-wrap:wrap}
+.test-heading p{max-width:670px;margin-bottom:0}
+.test-layout{display:grid;grid-template-columns:minmax(0,.92fr) minmax(0,1.08fr);align-items:start;gap:16px}
+.test-person-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.test-person{border:1px solid var(--line);background:var(--surface);padding:12px;border-radius:11px;text-align:left;display:grid;gap:7px;min-width:0}
+.test-person.active{border-color:#111317;box-shadow:inset 0 0 0 1px #111317;background:#f8fafc}
+.test-person:focus-visible{outline:3px solid #60a5fa}
+.test-person-head{display:flex;align-items:center;gap:7px;justify-content:space-between;min-width:0;flex-wrap:wrap}
+.test-person-head strong{font-size:13px;overflow-wrap:anywhere}
+.test-person-label{font-size:10px;color:var(--sub)}
+.test-person-stock{font-size:24px;font-weight:850;letter-spacing:-.06em;line-height:1.05}
+.test-person-stock small{font-size:11px;color:var(--sub)}
+.test-person-weapon{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.test-controller{position:relative}
+.test-tools{margin-top:18px;border-top:1px solid var(--line);padding-top:15px}
+.test-match-switch{background:white;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:15px}
+.test-match-list{display:flex;gap:8px;overflow-x:auto;padding:7px 0 1px}
+.test-match-list .card-btn{flex:0 0 210px;padding:12px}
+.test-match-list .card-title{font-size:12px}
+@media(max-width:900px){.test-layout{grid-template-columns:1fr}}
+@media(max-width:480px){.test-person-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.test-person{padding:9px}.test-person-stock{font-size:21px}}
+
+/* Small-screen admin navigation: do not push controls beyond the viewport. */
+.test-match-actions{margin:0 0 14px;border-color:#bbc4d0}
+.test-match-actions .btn{white-space:nowrap}
+@media (max-width:460px){
+ .header-inner{gap:7px;padding-inline:12px}
+ .brand{font-size:12px;gap:7px;letter-spacing:.04em;flex:0 0 auto}
+ .header-right{gap:5px;flex:0 1 auto}
+ .header-right .connection,.header-right>.badge{display:none}
+ .header-right .btn{min-height:31px;padding:6px 8px;font-size:11px}
+ .test-match-actions .between{align-items:stretch}
+ .test-match-actions .btn{width:100%}
+}
