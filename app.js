@@ -93,7 +93,7 @@ function renderQuick(){const w=st.weaponMap.get(st.quick.weapon)||st.weapons[0];
 }
 function renderHelp(){
   el.innerHTML=`<div class="shell main help-page"><div class="page-head"><div><div class="kicker">PLAYER GUIDE / SPLASTOCK</div><h1>参加者向けの使い方</h1><p class="sub mb0">試合中も、この画面から確認できます。</p></div><button class="btn btn-secondary" data-action="help-back">← 戻る</button></div>
-  <section class="panel panel-pad"><div class="kicker">BEFORE THE MATCH</div><h2>試合までの3ステップ</h2><ol class="help-steps"><li><strong>初回だけ自分の名前を選ぶ</strong><p>ホームの参加受付中の大会を開き、運営者が登録した名前を選択します。他人の名前を選ばないでください。</p></li><li><strong>ブキを選ぶ</strong><p>対戦画面で使用ブキを選びます。ブキは次の試合にも引き継がれます。変更があれば選び直してください。</p></li><li><strong>チームで「準備OK」</strong><p>4人のブキ登録と参加が揃ったら、チームの誰か1人が準備OKを押します。相手チームも準備OKになると自動で試合が開始されます。</p></li></ol><div class="warning">準備OK後にチーム内でブキが変更された場合、そのチームの準備OKは自動解除されます。再度押してください。</div></section>
+  <section class="panel panel-pad"><div class="kicker">BEFORE THE MATCH</div><h2>試合までの3ステップ</h2><ol class="help-steps"><li><strong>初回だけ自分の名前を選ぶ</strong><p>ホームの参加受付中の大会を開き、運営者が登録した名前を選択します。他人の名前を選ばないでください。</p></li><li><strong>ブキを選ぶ</strong><p>対戦画面で使用ブキを選びます。ブキは次の試合にも引き継がれます。変更があれば選び直してください。</p></li><li><strong>チームで「準備OK」</strong><p>4人のブキ登録と参加が揃ったら、チームの誰か1人が準備OKを押します。相手チームも準備OKになると自動で試合が開始されます。</p></li></ol><div class="warning">準備OK後にチーム内でブキが変更された場合、そのチームの準備OKは自動解除されます。再度押してください。</div><div class="notice margin-top">両チームが準備OKして試合開始となるまで、相手のブキ・個人ストック・チーム合計は「??」と表示されます。相手の準備OK状況だけは確認できます。</div></section>
   <section class="panel panel-pad margin-top"><div class="kicker">DURING THE MATCH</div><h2>デスしたら1タップ</h2><p>「1デス記録」を押すとストックが1減ります。押し間違えたら「取り消し」。残り0になったらリスポーン地点から出ないでください。</p><p>チーム合計と相手チームの残りストックは同じ画面で確認できます。<strong>勝敗を確定するのは運営者です。</strong></p><div class="notice">試合中にスマホを操作しやすい状態にしておいてください。「画面消灯防止」も利用できます（端末が対応している場合）。</div></section>
   <section class="panel panel-pad margin-top"><div class="kicker">IF SOMETHING GOES WRONG</div><h2>困ったとき</h2><dl class="help-faq"><dt>通信が切れた</dt><dd>端末に未送信の記録が残っている場合は再接続時に送信されます。「未同期」が消えるまで記録を削除しないでください。ほかの選手からはまだ最新の数字が見えない場合があります。</dd><dt>別の人の名前を選んだ</dt><dd>自分で新しく登録し直さず、運営者へ伝えてください。個人IDから割り当てを修正できます。</dd><dt>ブキが変えられない</dt><dd>デス記録がある試合ではブキの変更が制限されます。試合中の変更が必要なら運営者に相談してください。</dd><dt>残りストックがおかしい</dt><dd>まず未同期件数を確認し、デス記録の取り消しが必要なら操作してください。勝敗が確定してしまった場合は運営者へ連絡してください。</dd></dl></section>
   <div class="actions margin-top"><button class="btn btn-primary btn-large" data-action="help-back">元の画面に戻る</button><button class="btn btn-secondary" data-action="quick">簡易ストック計算</button></div></div>`;
@@ -107,12 +107,19 @@ function renderColorEditor(){
 }
 function pickEventDefault(data){const myTeam=data.slots.find(s=>s.profile_id===st.user?.id)?.team_id;return data.matches.find(m=>m.status==='live' && [m.team_a_id,m.team_b_id].includes(myTeam))||data.matches.find(m=>m.status==='live')||data.matches.find(m=>m.status==='pending'&&[m.team_a_id,m.team_b_id].includes(myTeam)&&m.team_a_id&&m.team_b_id)||data.matches.find(m=>m.status==='pending'&&m.team_a_id&&m.team_b_id)||data.matches[0]||null}
 function matchScore(mp,slot,m){const weapon=mp?.weapon_name||slot?.preferred_weapon;const max=mp?.base_stock??st.weaponMap.get(weapon)?.stock??null;let deaths=mp?.deaths||0;const queued=(!ADMIN_MODE&&m?.status==='live'&&slot?.profile_id===st.user?.id)?pendingFor(m.id):[];deaths+=queued.reduce((n,e)=>n+e.delta,0);return {weapon,max,deaths,remain:max===null?null:Math.max(0,max-deaths),queued:queued.length}}
+// Only the participant's own team may see its selections before the match begins.
+// The SQL RPC also masks opponent preferred_weapon: this display gate is defense in depth.
+function concealedTeam(teamId,m){return !ADMIN_MODE&&m?.status==='pending'&&mySlot()?.team_id!==teamId}
 function teamScores(teamId,m){const slots=st.event.slots.filter(s=>s.team_id===teamId).sort((a,b)=>a.position-b.position);let total=0,max=0,known=0;
-  const rows=slots.map(slot=>{const mp=m?.status==='pending'?null:st.matchPlayers.find(x=>x.slot_id===slot.id);const sc=matchScore(mp,slot,m);if(sc.max!==null){max+=sc.max;total+=sc.remain;known++}return {slot,sc}});
-  return {rows,total,max,complete:known===4,known};
+  const hidden=concealedTeam(teamId,m);
+  const rows=slots.map(slot=>{const mp=m?.status==='pending'?null:st.matchPlayers.find(x=>x.slot_id===slot.id);const sc=hidden?{weapon:null,max:null,deaths:0,remain:null}:matchScore(mp,slot,m);if(!hidden&&sc.max!==null){max+=sc.max;total+=sc.remain;known++}return {slot,sc}});
+  return {rows,total,max,complete:known===4,known,hidden};
 }
-function renderDuel(m){const a=teamScores(m.team_a_id,m),b=teamScores(m.team_b_id,m);return `<div class="dual-board"><div class="duel-side"><span class="duel-team">${esc(teamName(m.team_a_id))}</span><div class="duel-stock mono">${a.complete?a.total:'—'} <small>/ ${a.complete?a.max:'未確定'}</small></div></div><div class="duel-vs">VS</div><div class="duel-side rival"><span class="duel-team">${esc(teamName(m.team_b_id))}</span><div class="duel-stock mono">${b.complete?b.total:'—'} <small>/ ${b.complete?b.max:'未確定'}</small></div></div></div>`}
-function teamBoard(teamId,m,rival){const s=teamScores(teamId,m);return `<div class="team-board ${rival?'rival':''}"><div class="team-board-head"><div class="between"><span class="team-board-name">${esc(teamName(teamId))}</span><span class="badge">${s.known}/4 ブキ</span></div><div class="between margin-top"><span class="team-total mono">${s.complete?s.total:'—'} <small class="sub">/ ${s.complete?s.max:'未確定'}</small></span><span class="small sub">合計ストック</span></div><div class="bar"><span style="width:${s.complete&&s.max?Math.round(s.total/s.max*100):0}%"></span></div></div>${s.rows.map(({slot,sc})=>`<div class="roster-row">${avatar(st.event.profiles.find(p=>p.id===slot.profile_id)?.color)}<div class="roster-info"><strong>${esc(slot.display_name||'名前未設定')}${slot.profile_id===st.user?.id&&!ADMIN_MODE?'（自分）':''}</strong><small>${esc(sc.weapon||'ブキ未選択')}</small></div><div class="roster-value mono ${sc.remain===0?'red':''}">${sc.remain===null?'—':sc.remain}<small>${sc.max===null?'':' / '+sc.max}</small></div></div>`).join('')}</div>`}
+function renderDuel(m){const a=teamScores(m.team_a_id,m),b=teamScores(m.team_b_id,m);
+  const side=(teamId,s,rival)=>`<div class="duel-side ${rival?'rival':''}"><span class="duel-team">${esc(teamName(teamId))}</span><div class="duel-stock mono">${s.hidden?'??':s.complete?s.total:'—'} <small>/ ${s.hidden?'??':s.complete?s.max:'未確定'}</small></div></div>`;
+  return `<div class="dual-board">${side(m.team_a_id,a,false)}<div class="duel-vs">VS</div>${side(m.team_b_id,b,true)}</div>`;
+}
+function teamBoard(teamId,m,rival){const s=teamScores(teamId,m);return `<div class="team-board ${rival?'rival':''}"><div class="team-board-head"><div class="between"><span class="team-board-name">${esc(teamName(teamId))}</span><span class="badge">${s.hidden?'ブキ非公開':`${s.known}/4 ブキ`}</span></div><div class="between margin-top"><span class="team-total mono">${s.hidden?'??':s.complete?s.total:'—'} <small class="sub">/ ${s.hidden?'??':s.complete?s.max:'未確定'}</small></span><span class="small sub">合計ストック</span></div><div class="bar">${s.hidden?'<span style="width:0%"></span>':`<span style="width:${s.complete&&s.max?Math.round(s.total/s.max*100):0}%"></span>`}</div></div>${s.rows.map(({slot,sc})=>`<div class="roster-row">${avatar(st.event.profiles.find(p=>p.id===slot.profile_id)?.color)}<div class="roster-info"><strong>${esc(slot.display_name||'名前未設定')}${slot.profile_id===st.user?.id&&!ADMIN_MODE?'（自分）':''}</strong><small>${s.hidden?'??':esc(sc.weapon||'ブキ未選択')}</small></div><div class="roster-value mono ${!s.hidden&&sc.remain===0?'red':''}">${s.hidden?'??':sc.remain===null?'—':sc.remain}${s.hidden?'':`<small>${sc.max===null?'':' / '+sc.max}</small>`}</div></div>`).join('')}</div>`}
 function isTeamReady(matchId,teamId){return st.readyRows.some(r=>r.match_id===matchId&&r.team_id===teamId)}
 function renderReadyBoard(m,admin=false){
   if(m.status!=='pending'||!m.team_a_id||!m.team_b_id)return '';
@@ -120,11 +127,12 @@ function renderReadyBoard(m,admin=false){
   const rows=ids.map(id=>{
     const slots=st.event.slots.filter(s=>s.team_id===id);
     const registered=slots.filter(s=>s.profile_id).length;
-    const selected=slots.filter(s=>st.weaponMap.has(s.preferred_weapon)).length;
+    const hidden=concealedTeam(id,m);
+    const selected=hidden?0:slots.filter(s=>st.weaponMap.has(s.preferred_weapon)).length;
     const ready=isTeamReady(m.id,id);
     const canReady=slots.length===4&&selected===4&&(st.event.tournament.is_test||registered===4);
     const canEdit=!admin&&myTeam===id&&!st.event.tournament.is_test;
-    return `<div class="ready-team ${ready?'is-ready':''}"><div class="between"><strong>${esc(teamName(id))}</strong><span class="badge ${ready?'badge-live':''}">${ready?'✓ 準備OK':'準備中'}</span></div><div class="ready-count">ブキ ${selected}/4${!st.event.tournament.is_test?` · 参加 ${registered}/4`:''}</div>${canEdit?`<button class="btn ${ready?'btn-secondary':'btn-primary'} btn-block" data-action="team-ready" data-ready="${ready?'0':'1'}" data-match="${m.id}" ${!ready&&!canReady?'disabled':''}>${ready?'準備OKを取り消す':'このチームは準備OK'}</button>`:''}${!ready&&!canReady?'<p class="hint">4人全員の参加とブキ登録が必要です。</p>':''}</div>`;
+    return `<div class="ready-team ${ready?'is-ready':''}"><div class="between"><strong>${esc(teamName(id))}</strong><span class="badge ${ready?'badge-live':''}">${ready?'✓ 準備OK':'準備中'}</span></div><div class="ready-count">${hidden?'ブキ ??/4 · 参加 ??/4':`ブキ ${selected}/4${!st.event.tournament.is_test?` · 参加 ${registered}/4`:''}`}</div>${canEdit?`<button class="btn ${ready?'btn-secondary':'btn-primary'} btn-block" data-action="team-ready" data-ready="${ready?'0':'1'}" data-match="${m.id}" ${!ready&&!canReady?'disabled':''}>${ready?'準備OKを取り消す':'このチームは準備OK'}</button>`:''}${!ready&&!canReady?'<p class="hint">4人全員の参加とブキ登録が必要です。</p>':''}</div>`;
   }).join('');
   return `<section class="ready-panel margin-top" aria-label="試合準備状況"><div class="between ready-heading"><div><div class="kicker">TEAM CHECK-IN</div><h3>両チームの準備状況</h3></div><span class="badge">両チームOKで自動開始</span></div><div class="ready-grid">${rows}</div><p class="hint">準備OKはチームで1人が押せば完了。ブキを変更するとそのチームの準備OKは解除されます。勝敗は運営者が確定します。</p></section>`;
 }
@@ -134,7 +142,7 @@ function personalControl(m){const slot=mySlot(),me=slot&&matchOfMe(m);if(!me)ret
 }
 function matchSelector(m){return `<button class="card-btn ${m.id===st.matchId?'active':''}" data-action="pick-match" data-id="${m.id}"><div class="between"><span class="small sub">R${m.round_index} / #${m.match_index}</span>${badge(m.status)}</div><div class="card-title">${esc(teamName(m.team_a_id))} <span class="sub">vs</span> ${esc(teamName(m.team_b_id))}</div></button>`}
 function renderMatches(admin){const d=event();if(!d.matches.length)return `<div class="empty">対戦表はまだありません。${admin?'主催者が対戦表を生成してください。':'主催者の設定をお待ちください。'}</div>`;
-  const m=currMatch();return `<div class="grid-aside"><section><div class="section-head"><h2>対戦一覧</h2><span class="badge">${d.matches.length}試合</span></div><div class="matches-list">${d.matches.map(matchSelector).join('')}</div></section><section><div class="section-head"><h2>${m?`${esc(teamName(m.team_a_id))} vs ${esc(teamName(m.team_b_id))}`:'試合を選択'}</h2>${m?badge(m.status):''}</div>${m?`${renderReadyBoard(m,admin)}${renderDuel(m)}${admin?adminMatchControls(m):''}<div class="control-grid">${admin?`<section class="personal-card"><div class="kicker">ORGANIZER VIEW</div><h3>全選手のストックを確認</h3><p class="sub small">選手のデス記録は本人が操作します。ここからは勝敗と試合進行のみ管理できます。</p></section>`:personalControl(m)}<div class="scoreboard">${teamBoard(m.team_a_id,m,false)}${teamBoard(m.team_b_id,m,true)}</div></div><p class="detail-note">ブキ未選択の選手がいる間、チームの合計ストックは「未確定」と表示します。通信切断中の本人の操作は他端末には未反映です。</p>`:''}</section></div>`;
+  const m=currMatch();return `<div class="grid-aside"><section><div class="section-head"><h2>対戦一覧</h2><span class="badge">${d.matches.length}試合</span></div><div class="matches-list">${d.matches.map(matchSelector).join('')}</div></section><section><div class="section-head"><h2>${m?`${esc(teamName(m.team_a_id))} vs ${esc(teamName(m.team_b_id))}`:'試合を選択'}</h2>${m?badge(m.status):''}</div>${m?`${renderReadyBoard(m,admin)}${renderDuel(m)}${admin?adminMatchControls(m):''}<div class="control-grid">${admin?`<section class="personal-card"><div class="kicker">ORGANIZER VIEW</div><h3>全選手のストックを確認</h3><p class="sub small">選手のデス記録は本人が操作します。ここからは勝敗と試合進行のみ管理できます。</p></section>`:personalControl(m)}<div class="scoreboard">${teamBoard(m.team_a_id,m,false)}${teamBoard(m.team_b_id,m,true)}</div></div><p class="detail-note">${!admin&&m.status==='pending'?'相手のブキ・個人ストック・チーム合計は、両チームの準備OKによる試合開始まで「??」で非公開です。 ':''}ブキ未選択の選手がいる間、チームの合計ストックは「未確定」と表示します。通信切断中の本人の操作は他端末には未反映です。</p>`:''}</section></div>`;
 }
 function adminMatchControls(m){if(m.status==='finished')return `<div class="success-note margin-top result-complete"><div><strong>勝者：${esc(teamName(m.winner_id))}</strong><p class="hint">誤確定は記録を残して訂正できます。次の試合が始まっている場合は訂正できません。</p></div><button class="btn btn-secondary btn-small" data-action="admin-revise-result" data-id="${m.id}">結果を訂正・再開</button></div>`;
   if(!m.team_a_id||!m.team_b_id)return '<div class="warning margin-top">両チームが確定していません。</div>';
@@ -148,7 +156,7 @@ function renderSchedule(){const d=event();if(!d.matches.length)return '<div clas
   }
   return `<div class="section-head"><h2>トーナメント表</h2><span class="badge">横スクロールで全ラウンドを確認</span></div><div class="bracket">${rounds.map(r=>`<div class="bracket-col"><div class="kicker">ROUND ${r}</div>${d.matches.filter(m=>m.round_index===r).map(m=>`<button class="card-btn ${m.id===st.matchId?'active':''}" data-action="pick-match" data-id="${m.id}"><div class="between"><span class="small sub">MATCH ${m.match_index}</span>${badge(m.status)}</div><div class="card-title">${esc(teamName(m.team_a_id))}</div><div class="card-title">${esc(teamName(m.team_b_id))}</div></button>`).join('')}</div>`).join('')}</div>`;
 }
-function teamLists(){return `<div class="grid-2">${st.event.teams.map(team=>`<section class="team-roster"><div class="between"><h3>${esc(team.name)}</h3><span class="badge">TEAM ${team.seed}</span></div>${st.event.slots.filter(s=>s.team_id===team.id).sort((a,b)=>a.position-b.position).map(s=>{const p=st.event.profiles.find(x=>x.id===s.profile_id);return `<div class="roster-row">${avatar(p?.color)}<div class="roster-info"><strong>${esc(s.display_name||'名前未設定')}</strong><small>${esc(s.preferred_weapon||'ブキ未選択')}${s.profile_id?'':' · 未参加'}</small></div><span class="badge">${s.profile_id?'参加済み':s.position+'番'}</span></div>`}).join('')}</section>`).join('')}</div>`}
+function teamLists(){return `<div class="grid-2">${st.event.teams.map(team=>`<section class="team-roster"><div class="between"><h3>${esc(team.name)}</h3><span class="badge">TEAM ${team.seed}</span></div>${st.event.slots.filter(s=>s.team_id===team.id).sort((a,b)=>a.position-b.position).map(s=>{const p=st.event.profiles.find(x=>x.id===s.profile_id);const mine=ADMIN_MODE||mySlot()?.team_id===team.id;const started=currMatch()?.status!=='pending'&&st.matchPlayers.find(mp=>mp.slot_id===s.id);const weapon=mine?s.preferred_weapon:started?.weapon_name;return `<div class="roster-row">${avatar(p?.color)}<div class="roster-info"><strong>${esc(s.display_name||'名前未設定')}</strong><small>${weapon?esc(weapon):mine?'ブキ未選択':'??'}</small></div><span class="badge">${s.profile_id?'参加済み':s.position+'番'}</span></div>`}).join('')}</section>`).join('')}</div>`}
 function eventHeader(admin=false){const e=st.event;if(!e)return '';return `<div class="page-head"><div><div class="kicker">${admin?'ORGANIZER / EVENT':'PLAYER / EVENT'}</div><h1>${esc(e.tournament.name)}</h1><div class="actions">${badge(e.tournament.status)}<span class="badge">${fmt(e.tournament.format)}</span><span class="badge">${e.teams.length}チーム</span>${admin?`<span class="badge ${e.tournament.is_test?'badge-dark':e.tournament.is_open?'badge-live':''}">${e.tournament.is_test?'テスト専用 / 非公開':e.tournament.is_open?'参加受付中':'受付停止'}</span>`:''}</div></div><button class="btn btn-secondary" data-action="home">← ホーム</button></div>`}
 function renderEvent(){if(!st.event){el.innerHTML='<div class="shell loading">大会データを読み込み中…</div>';return}
   const slot=mySlot();const tabs=[['match','対戦・ストック'],['schedule','対戦表'],['teams','チーム一覧']];
@@ -229,7 +237,7 @@ async function loadEvent(id,first=false){const c=client();if(!c)return;if(st.loa
     const [t,teams,slots,matches,ready]=await Promise.all([
       c.from('tournaments').select('id,organizer_id,name,format,status,created_at,is_open,is_test').eq('id',id).single(),
       c.from('teams').select('id,tournament_id,seed,name').eq('tournament_id',id).order('seed'),
-      c.from('player_slots').select('id,tournament_id,team_id,position,display_name,profile_id,preferred_weapon').eq('tournament_id',id),
+      c.rpc('list_visible_slots',{p_tournament:id}),
       c.from('matches').select('id,tournament_id,round_index,match_index,team_a_id,team_b_id,status,winner_id,next_match_id,advance_to_side').eq('tournament_id',id).order('round_index').order('match_index'),
       c.from('match_team_ready').select('match_id,team_id,ready_at').eq('tournament_id',id)
     ]);
@@ -262,7 +270,7 @@ function refreshSoon(){if(!st.eventId||!['event','admin-event'].includes(st.view
   clearTimeout(st.refreshTimer);st.refreshTimer=setTimeout(()=>{if(st.loading)refreshSoon();else loadEvent(st.eventId)},350)
 }
 function subscribe(id){unsubscribe();const c=client();const ch=c.channel('splastock-v2-'+id+'-'+uuid().slice(0,8));
-  for(const table of ['matches','player_slots','match_players','teams','match_team_ready'])ch.on('postgres_changes',{event:'*',schema:'public',table,filter:`tournament_id=eq.${id}`},refreshSoon);
+  for(const table of ['matches','match_players','teams','match_team_ready'])ch.on('postgres_changes',{event:'*',schema:'public',table,filter:`tournament_id=eq.${id}`},refreshSoon);
   ch.on('postgres_changes',{event:'*',schema:'public',table:'tournaments',filter:`id=eq.${id}`},refreshSoon);
   ch.on('postgres_changes',{event:'*',schema:'public',table:'profiles'},refreshSoon);
   ch.subscribe(status=>{st.realtime=status;statusHeader();if(status==='SUBSCRIBED')refreshSoon()});st.channel=ch;
@@ -452,5 +460,14 @@ document.addEventListener('submit',async e=>{const f=e.target;if(!['admin-login-
 window.addEventListener('online',()=>{statusHeader();drain();refreshSoon()});
 window.addEventListener('offline',()=>{statusHeader();if(st.view==='event')show()});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){ensureWake();drain();refreshSoon()}});
-setInterval(()=>{if(st.view==='event'&&navigator.onLine&&!st.loading)refreshSoon();if(st.view==='admin-event'&&st.adminTab!=='roster'&&!st.loading)refreshSoon()},15000);
+// player_slots is removed from the Realtime publication for secrecy.
+// Refresh the ready lobby every 6 seconds; use a slower safety poll after match start.
+let lastSafetyPoll=0;
+setInterval(()=>{if(!navigator.onLine||st.loading)return;
+  const isPlayer=st.view==='event',isAdminEvent=st.view==='admin-event'&&st.adminTab!=='roster';
+  if(!isPlayer&&!isAdminEvent)return;
+  const interval=currMatch()?.status==='pending'?6000:15000;
+  if(Date.now()-lastSafetyPoll<interval)return;
+  lastSafetyPoll=Date.now();refreshSoon();
+},3000);
 boot();
