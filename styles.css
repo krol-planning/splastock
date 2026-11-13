@@ -47,3 +47,21 @@
 .admin-login .notice{line-height:1.75}
 .admin-login form .field{min-height:47px}
 @media(max-width:460px){.header-right [data-action='admin-password']{font-size:10px;padding:6px 7px}.admin-login{margin:16px auto}}
+
+/* V5: team check-in, result corrections and in-app participant help */
+.ready-panel{background:#fff;border:1px solid #d5dce4;border-radius:16px;padding:20px;box-shadow:0 8px 20px #0b14230a}
+.ready-heading{margin-bottom:14px;gap:12px}.ready-heading h3{margin:4px 0 0}
+.ready-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.ready-team{border:1px solid var(--line);background:#f7f9fb;border-radius:13px;padding:17px;min-width:0}
+.ready-team.is-ready{background:#effcf5;border-color:#95deb7}
+.ready-team strong{font-size:15px;overflow-wrap:anywhere}.ready-team .badge{flex:none}
+.ready-team .btn{margin-top:12px;min-height:44px}.ready-count{margin-top:9px;color:var(--sub);font-size:12px}
+.ready-team .hint{margin:9px 0 0}.result-complete{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.result-complete .hint{margin:6px 0 0}.audit-row{border-top:1px solid var(--line);padding:10px 0;font-size:13px}
+.audit-row:first-child{border-top:0}.audit-row .sub{margin-top:4px}
+.help-page{max-width:900px}.help-page h2{margin-top:8px}.help-page .panel{margin-bottom:16px}
+.help-steps{padding-left:25px;counter-reset:step;display:grid;gap:15px}
+.help-steps li{line-height:1.65}.help-steps li strong{font-size:16px}.help-steps li p{margin:4px 0 0;color:var(--sub);font-size:14px}
+.help-faq{display:grid;grid-template-columns:minmax(115px,180px) minmax(0,1fr);gap:11px 20px}
+.help-faq dt{font-weight:800}.help-faq dd{margin:0;color:var(--sub);line-height:1.7}
+@media(max-width:640px){.ready-grid{grid-template-columns:1fr}.ready-panel{padding:15px}.ready-heading{align-items:start}.help-faq{grid-template-columns:1fr;gap:4px}.help-faq dd{margin-bottom:15px}.result-complete .btn{width:100%}}
