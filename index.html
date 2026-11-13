@@ -2,118 +2,26 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#171522">
-  <title>ストック制スプラ</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: #171522;
-      color: #f7f5ff;
-      font-synthesis: none;
-      text-rendering: optimizeLegibility;
-      --bg: #171522;
-      --surface: #211e30;
-      --surface-2: #2a263a;
-      --line: #39344d;
-      --muted: #aaa5bd;
-      --lime: #d3ff63;
-      --violet: #ad94ff;
-      --cyan: #71dce2;
-      --pink: #ff91b5;
-      --radius: 18px;
-      --shadow: 0 18px 48px #09081155;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-width: 320px; background: radial-gradient(ellipse at 80% -20%, #44336366, transparent 42%), var(--bg); }
-    .site-header { position: sticky; top: 0; z-index: 5; min-height: 68px; padding: 12px max(20px, calc((100% - 1120px) / 2)); display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #171522eF; border-bottom: 1px solid #ffffff12; backdrop-filter: blur(18px); }
-    .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--lime); font-size: 15px; letter-spacing: .12em; font-weight: 900; text-decoration: none; }
-    .brand::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 18px #d3ff6388; }
-    #header-right { display: flex; align-items: center; gap: 12px; }
-    #app { min-height: calc(100vh - 68px); }
-    button, input, select, textarea { font: inherit; }
-    button { cursor: pointer; }
-    a { color: inherit; }
-    :focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
-    .main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 38px 0 72px; }
-    h1, h2, h3, p { margin-top: 0; }
-    h1 { font-size: clamp(2.2rem, 5vw, 4.1rem); line-height: 1.08; letter-spacing: -.055em; }
-    h2 { font-size: clamp(1.25rem, 2.5vw, 1.8rem); letter-spacing: -.025em; }
-    .subline, .muted, .small { color: var(--muted); line-height: 1.75; }
-    .eyebrow, .section-label, .meta { color: var(--cyan); font-size: .72rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
-    .accent { color: var(--lime); }
-    .panel, .hero, .event-card, .team-block, .match-entry, .my-control, .match-action-card { border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, #29253a, #211e30 70%); box-shadow: var(--shadow); }
-    .panel-pad { padding: clamp(18px, 3vw, 30px); }
-    .hero { position: relative; overflow: hidden; padding: clamp(26px, 6vw, 64px); background: radial-gradient(ellipse at 90% 15%, #7561b844, transparent 40%), linear-gradient(130deg, #302a45, #211e30 68%); }
-    .hero::after { content: ""; position: absolute; width: 220px; height: 220px; border-radius: 48% 52% 43% 57%; right: -72px; bottom: -132px; border: 1px solid #d3ff6333; transform: rotate(-24deg); box-shadow: 0 0 0 24px #d3ff6308, 0 0 0 48px #d3ff6306; pointer-events: none; }
-    .hero-content { max-width: 720px; position: relative; z-index: 1; }
-    .btn { border: 1px solid transparent; border-radius: 12px; padding: 11px 17px; font-weight: 750; transition: transform .16s ease, filter .16s ease, background .16s ease; }
-    .btn:hover, .event-card:hover, .match-entry:hover { transform: translateY(-2px); filter: brightness(1.08); }
-    .btn-accent { background: var(--lime); color: #1b1a20; }
-    .btn-ghost { background: #ffffff08; border-color: var(--line); color: #f7f5ff; }
-    .btn-small { padding: 8px 12px; font-size: .88rem; }
-    .field, input, select, textarea { width: 100%; color: #f7f5ff; background: #191725; border: 1px solid #464058; border-radius: 11px; padding: 12px 14px; }
-    .field:focus, input:focus, select:focus, textarea:focus { border-color: var(--cyan); outline: 2px solid #71dce233; }
-    .form-group { margin: 14px 0; }
-    .form-label { display: block; margin: 0 0 8px; color: #d9d5e5; font-size: .9rem; font-weight: 700; }
-    .pill, .status-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: #ffffff08; color: #d9d5e5; font-size: .78rem; font-weight: 750; }
-    .pill-lime { color: var(--lime); border-color: #d3ff6340; background: #d3ff6310; }
-    .pill-cyan { color: var(--cyan); border-color: #71dce240; background: #71dce210; }
-    .pill-purple { color: var(--violet); border-color: #ad94ff40; background: #ad94ff10; }
-    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-    .actions, .row, .row-between, .back-row, .section-head, .section-head > div { display: flex; align-items: center; gap: 12px; }
-    .row-between, .section-head { justify-content: space-between; }
-    .back-row { margin-bottom: 22px; justify-content: space-between; }
-    .section-head { margin: 28px 0 14px; }
-    .section-head h2, .section-head h3 { margin: 3px 0 0; }
-    .event-list, .match-list { display: grid; gap: 12px; }
-    .event-card, .match-entry { display: block; width: 100%; padding: 18px 20px; text-align: left; color: inherit; transition: .16s ease; }
-    .nav-tabs { display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--line); margin: 22px 0; }
-    .tab { padding: 11px 14px; color: var(--muted); background: transparent; border: 0; border-bottom: 2px solid transparent; }
-    .tab.active { color: var(--lime); border-color: var(--lime); }
-    .team-block { padding: 18px; }
-    .team-header { margin-bottom: 10px; }
-    .team-player, .player-row { border-top: 1px solid #ffffff12; padding: 12px 0; }
-    .match-entry.active { border-color: var(--lime); }
-    .duel-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; padding: 16px; border-radius: 14px; background: #171522; }
-    .duel-side { display: grid; gap: 5px; }
-    .duel-side.rival { text-align: right; }
-    .duel-vs { color: var(--pink); font-weight: 900; }
-    .duel-num { color: var(--lime); font-size: 1.6rem; font-weight: 900; }
-    .toast { display: none; }
-    .toast.active { display: block; position: fixed; right: 16px; bottom: 16px; z-index: 10; max-width: min(440px, calc(100vw - 32px)); padding: 12px 16px; border-radius: 12px; background: var(--lime); color: #201a36; box-shadow: var(--shadow); }
-    .toast.error { background: var(--pink); }
-    dialog { width: min(520px, calc(100% - 32px)); border: 1px solid #625878; border-radius: 16px; background: #2a263a; color: inherit; box-shadow: var(--shadow); }
-    dialog::backdrop { background: #100d1ccc; backdrop-filter: blur(4px); }
-    #confirm-body { margin-bottom: 20px; }
-    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
-    .tierlist-card { margin: 28px 0 0; padding: 18px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: #211e30; box-shadow: var(--shadow); }
-    .tierlist-card figcaption { margin-bottom: 14px; }
-    .tierlist-card img { display: block; width: 100%; height: auto; border-radius: 12px; }
-    .avatar-dot { display: inline-grid !important; place-items: center; width: 30px; height: 30px; min-width: 30px; border-radius: 50%; color: transparent !important; font-size: 0 !important; border: 2px solid #ffffffaa !important; box-shadow: 0 0 0 3px #ffffff12; }
-    .admin-lock-note { padding: 12px 14px; border: 1px dashed #ad94ff77; border-radius: 12px; color: var(--muted); font-size: .88rem; }
-    .admin-lock-note strong { color: var(--violet); }
-    @media (max-width: 720px) { .main { width: min(100% - 28px, 1120px); padding-top: 24px; } .grid-2 { grid-template-columns: 1fr; } .site-header { min-height: 60px; padding-inline: 14px; } .hero { padding: 28px 22px; } .row { flex-wrap: wrap; } .duel-strip { gap: 6px; padding: 12px; } }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
-  </style>
-</head>
-<body>
-  <header class="site-header">
-    <a class="brand" href="./" aria-label="SPLASTOCK ホーム。大会管理モードはロゴを5回クリック">SPLASTOCK</a>
-    <div id="header-right"></div>
-  </header>
-  <main id="app" aria-live="polite"></main>
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <dialog id="confirm-dialog">
-    <div id="confirm-body"></div>
-    <form method="dialog" class="dialog-actions">
-      <button class="btn btn-ghost" value="cancel">キャンセル</button>
-      <button class="btn btn-accent" value="confirm">確認</button>
-    </form>
-  </dialog>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111526">
+  <meta name="description" content="ストック制スプラの大会・対戦・チームストックをみんなで同期するWebアプリ">
+  <title>SPLASTOCK — ストック制スプラ大会サポート</title>
+  <link rel="stylesheet" href="./styles.css">
   <script src="./config.js"></script>
   <script type="module" src="./app.js"></script>
-  <script type="module" src="./customization.js"></script>
+</head>
+<body>
+  <div class="glow glow-a" aria-hidden="true"></div>
+  <div class="glow glow-b" aria-hidden="true"></div>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="SPLASTOCK ホーム"><span class="brand-icon">S<span class="dot">.</span></span><span class="brand-name">SPLA<span>STOCK</span><small>STOCK BATTLE MANAGER</small></span></a>
+      <div id="header-right" class="header-right"><span class="status-chip"><span class="pulse"></span>読込中</span></div>
+    </header>
+    <main id="app" aria-live="polite"><section class="center-loading"><div class="spinner"></div><p>ブキ情報を読み込み中…</p></section></main>
+    <footer class="footer"><span>SPLASTOCK • Community tournament tool</span><span>非公式ファン制作ツール / 任天堂とは無関係です</span></footer>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="confirm-dialog" class="confirm-dialog"><form method="dialog" class="dialog-content"><div id="confirm-body"></div><div class="dialog-actions"><button value="cancel" class="btn btn-outline">キャンセル</button><button id="confirm-ok" value="confirm" class="btn btn-accent">確定する</button></div></form></dialog>
 </body>
 </html>
