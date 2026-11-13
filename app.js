@@ -18,10 +18,11 @@ const store = {
 function getJSON(k,otherwise){try{return JSON.parse(store.get(k)) ?? otherwise}catch{return otherwise}}
 const st = {
   weapons:[],weaponMap:new Map(),
-  view:ADMIN_MODE?'admin-login':'home',tab:'match',adminTab:'roster',
+  view:ADMIN_MODE?'admin-login':new URLSearchParams(location.search).has('help')?'help':'home',tab:'match',adminTab:'roster',
   playerClient:null,adminClient:null,user:null,adminUser:null,profile:null,isAdmin:false,
   tournaments:[],publicEvents:[],adminEvents:[],
   event:null,eventId:null,matchId:null,matchPlayers:[],roster:[],testSlotId:null,
+  readyRows:[],resultHistory:[],helpReturn:'home',
   claimEventId:null,claimColor:COLORS[0],
   quick:getJSON('splastock_solo_v1',{weapon:'スプラシューター',deaths:0}),
   recent:getJSON('splastock_recent_weapons_v1',['スプラシューター','シャープマーカー','リッター4K']),
@@ -56,11 +57,13 @@ function statusHeader(){
     (ADMIN_MODE
       ? `<span class="badge badge-dark">運営者</span>${st.isAdmin?'<button class="btn btn-secondary btn-small" data-action="admin-password">パスワード設定</button><button class="btn btn-secondary btn-small" data-action="admin-logout">ログアウト</button>':''}`
       : st.profile ? `<span class="profile-pill" title="個人ID: ${esc(st.user?.id)}">${avatar(st.profile.color)}<span class="text-clip">${esc(mySlot()?.display_name||st.profile.nickname)}</span></span>` : '')+
+    (!ADMIN_MODE ? '<button class="btn btn-secondary btn-small" data-action="help">使い方</button>' : '')+
     (!isHome?`<button class="btn btn-secondary btn-small" data-action="home">ホーム</button>`:'');
 }
-function show(){statusHeader();if(st.bootError&&st.view!=='quick'){renderError();return}
+function show(){statusHeader();if(st.bootError&&st.view!=='quick'&&st.view!=='help'){renderError();return}
   switch(st.view){
     case 'quick':return renderQuick();
+    case 'help':return renderHelp();
     case 'claim':return renderClaim();
     case 'color':return renderColorEditor();
     case 'event':return renderEvent();
@@ -75,7 +78,7 @@ function renderError(){el.innerHTML=`<div class="shell main"><section class="pan
 function renderHome(){
   const mine=st.tournaments.map(t=>`<button class="card-btn" data-action="open-event" data-id="${t.id}"><div class="between"><span class="kicker">MY TOURNAMENT</span>${badge(t.status)}</div><div class="card-title">${esc(t.name)}</div><div class="card-sub">${fmt(t.format)} · チームのストックを確認する</div></button>`).join('');
   const pub=st.publicEvents.filter(t=>!st.tournaments.some(x=>x.id===t.id)).map(t=>`<button class="card-btn" data-action="open-claim" data-id="${t.id}"><div class="between"><span class="kicker">参加受付中</span><span class="badge">${t.registered}/${Number(t.team_count)*4} 人</span></div><div class="card-title">${esc(t.name)}</div><div class="card-sub">${fmt(t.format)} · 登録された名前から自分を選ぶ</div></button>`).join('');
-  el.innerHTML=`<div class="shell main"><section class="banner-hero"><div><div class="kicker">PLAYER / STOCK TRACKING</div><h1>一つの画面で、<br>8人のストックを。</h1><p class="lead">自分のブキを選んで、デスしたら1タップ。味方と相手の残りストックを同じ画面で確認できます。</p><div class="actions"><button class="btn btn-primary btn-large" data-action="quick">簡易ストック計算 →</button>${st.publicEvents.length?'<button class="btn btn-secondary btn-large" data-action="scroll-events">大会に参加する</button>':''}</div></div><div class="hero-visual"><div class="hero-number">08</div><div class="hero-label">PLAYERS / MATCH</div></div></section>
+  el.innerHTML=`<div class="shell main"><section class="banner-hero"><div><div class="kicker">PLAYER / STOCK TRACKING</div><h1>一つの画面で、<br>8人のストックを。</h1><p class="lead">自分のブキを選んで、デスしたら1タップ。味方と相手の残りストックを同じ画面で確認できます。</p><div class="actions"><button class="btn btn-primary btn-large" data-action="quick">簡易ストック計算 →</button><button class="btn btn-secondary btn-large" data-action="help">使い方を見る</button>${st.publicEvents.length?'<button class="btn btn-secondary btn-large" data-action="scroll-events">大会に参加する</button>':''}</div></div><div class="hero-visual"><div class="hero-number">08</div><div class="hero-label">PLAYERS / MATCH</div></div></section>
     ${st.user?`<div class="notice margin-top"><div class="between"><span>${st.profile?avatar(st.profile.color,'avatar-sm'):''} 個人ID：<code>${esc(fmtTinyId(st.user?.id))}</code>　<span class="small">同じブラウザで次回から自動認識します。</span></span><button class="btn btn-secondary btn-small" data-action="copy-id" data-id="${esc(st.user.id)}">IDコピー</button></div></div>`:''}
     ${!configured?'<div class="warning margin-top">Supabaseが未設定です。簡易ストック計算は引き続き利用できます。</div>':''}
     <div id="events-section"><div class="section-head"><div><div class="section-caption">YOUR MATCHES</div><h2>参加中の大会</h2></div></div>${mine?`<div class="grid-2">${mine}</div>`:'<div class="empty">まだ参加中の大会はありません。</div>'}
@@ -87,6 +90,13 @@ function selectWeapons(id,current,changeAttr){return `<select id="${id}" class="
 function dots(n,max){return `<div class="stock-dots">${Array.from({length:max||0},(_,i)=>`<span class="stock-dot ${i<n?'on':''}"></span>`).join('')}</div>`}
 function renderQuick(){const w=st.weaponMap.get(st.quick.weapon)||st.weapons[0];if(!w)return;const deaths=Math.min(w.stock,Math.max(0,Number(st.quick.deaths)||0));const remain=w.stock-deaths;
   el.innerHTML=`<div class="shell main"><div class="page-head"><div><div class="kicker">QUICK TOOL / OFFLINE READY</div><h1>簡易ストック計算</h1><p class="sub mb0">ブキを選んでデスを記録。会員登録も通信も必要ありません。</p></div><button class="btn btn-secondary" data-action="home">← 戻る</button></div><div class="quick-layout"><section class="panel panel-pad"><div class="form-group"><label class="field-label" for="quick-search">使用ブキ（全65種類）</label><input id="quick-search" class="field" type="search" data-weapon-filter="quick" placeholder="ブキ名で検索" aria-label="ブキ検索" style="margin-bottom:8px">${selectWeapons('quick-weapon',w.name,'quick-weapon')}</div><div class="stock-figure"><div class="sub small strong">残りストック</div><span class="stock-big ${remain===0?'danger':''} mono">${remain}</span><span class="stock-out"> / ${w.stock}</span>${dots(remain,w.stock)}<div class="sub">デス ${deaths}回</div></div>${remain===0?'<p class="error-note">ストック切れ：リスポーンから出ない</p>':''}<div class="stack"><button class="btn btn-death btn-block" data-action="quick-death" ${remain===0?'disabled':''}>＋ 1デス記録</button><button class="btn btn-secondary btn-block" data-action="quick-undo" ${deaths===0?'disabled':''}>↶ 取り消し</button><button class="btn btn-text" data-action="quick-reset">デス数をリセット</button></div><p class="detail-note">このページのブキとデス数は端末内に保存されます。大会での同期には影響しません。</p></section><div class="quick-tiers">${tierFigure()}</div></div></div>`;
+}
+function renderHelp(){
+  el.innerHTML=`<div class="shell main help-page"><div class="page-head"><div><div class="kicker">PLAYER GUIDE / SPLASTOCK</div><h1>参加者向けの使い方</h1><p class="sub mb0">試合中も、この画面から確認できます。</p></div><button class="btn btn-secondary" data-action="help-back">← 戻る</button></div>
+  <section class="panel panel-pad"><div class="kicker">BEFORE THE MATCH</div><h2>試合までの3ステップ</h2><ol class="help-steps"><li><strong>初回だけ自分の名前を選ぶ</strong><p>ホームの参加受付中の大会を開き、運営者が登録した名前を選択します。他人の名前を選ばないでください。</p></li><li><strong>ブキを選ぶ</strong><p>対戦画面で使用ブキを選びます。ブキは次の試合にも引き継がれます。変更があれば選び直してください。</p></li><li><strong>チームで「準備OK」</strong><p>4人のブキ登録と参加が揃ったら、チームの誰か1人が準備OKを押します。相手チームも準備OKになると自動で試合が開始されます。</p></li></ol><div class="warning">準備OK後にチーム内でブキが変更された場合、そのチームの準備OKは自動解除されます。再度押してください。</div></section>
+  <section class="panel panel-pad margin-top"><div class="kicker">DURING THE MATCH</div><h2>デスしたら1タップ</h2><p>「1デス記録」を押すとストックが1減ります。押し間違えたら「取り消し」。残り0になったらリスポーン地点から出ないでください。</p><p>チーム合計と相手チームの残りストックは同じ画面で確認できます。<strong>勝敗を確定するのは運営者です。</strong></p><div class="notice">試合中にスマホを操作しやすい状態にしておいてください。「画面消灯防止」も利用できます（端末が対応している場合）。</div></section>
+  <section class="panel panel-pad margin-top"><div class="kicker">IF SOMETHING GOES WRONG</div><h2>困ったとき</h2><dl class="help-faq"><dt>通信が切れた</dt><dd>端末に未送信の記録が残っている場合は再接続時に送信されます。「未同期」が消えるまで記録を削除しないでください。ほかの選手からはまだ最新の数字が見えない場合があります。</dd><dt>別の人の名前を選んだ</dt><dd>自分で新しく登録し直さず、運営者へ伝えてください。個人IDから割り当てを修正できます。</dd><dt>ブキが変えられない</dt><dd>デス記録がある試合ではブキの変更が制限されます。試合中の変更が必要なら運営者に相談してください。</dd><dt>残りストックがおかしい</dt><dd>まず未同期件数を確認し、デス記録の取り消しが必要なら操作してください。勝敗が確定してしまった場合は運営者へ連絡してください。</dd></dl></section>
+  <div class="actions margin-top"><button class="btn btn-primary btn-large" data-action="help-back">元の画面に戻る</button><button class="btn btn-secondary" data-action="quick">簡易ストック計算</button></div></div>`;
 }
 function renderClaim(){
   const groups=[...new Map(st.roster.map(s=>[s.team_id,{id:s.team_id,name:s.team_name,seed:s.team_seed}])).values()];
@@ -103,17 +113,32 @@ function teamScores(teamId,m){const slots=st.event.slots.filter(s=>s.team_id===t
 }
 function renderDuel(m){const a=teamScores(m.team_a_id,m),b=teamScores(m.team_b_id,m);return `<div class="dual-board"><div class="duel-side"><span class="duel-team">${esc(teamName(m.team_a_id))}</span><div class="duel-stock mono">${a.complete?a.total:'—'} <small>/ ${a.complete?a.max:'未確定'}</small></div></div><div class="duel-vs">VS</div><div class="duel-side rival"><span class="duel-team">${esc(teamName(m.team_b_id))}</span><div class="duel-stock mono">${b.complete?b.total:'—'} <small>/ ${b.complete?b.max:'未確定'}</small></div></div></div>`}
 function teamBoard(teamId,m,rival){const s=teamScores(teamId,m);return `<div class="team-board ${rival?'rival':''}"><div class="team-board-head"><div class="between"><span class="team-board-name">${esc(teamName(teamId))}</span><span class="badge">${s.known}/4 ブキ</span></div><div class="between margin-top"><span class="team-total mono">${s.complete?s.total:'—'} <small class="sub">/ ${s.complete?s.max:'未確定'}</small></span><span class="small sub">合計ストック</span></div><div class="bar"><span style="width:${s.complete&&s.max?Math.round(s.total/s.max*100):0}%"></span></div></div>${s.rows.map(({slot,sc})=>`<div class="roster-row">${avatar(st.event.profiles.find(p=>p.id===slot.profile_id)?.color)}<div class="roster-info"><strong>${esc(slot.display_name||'名前未設定')}${slot.profile_id===st.user?.id&&!ADMIN_MODE?'（自分）':''}</strong><small>${esc(sc.weapon||'ブキ未選択')}</small></div><div class="roster-value mono ${sc.remain===0?'red':''}">${sc.remain===null?'—':sc.remain}<small>${sc.max===null?'':' / '+sc.max}</small></div></div>`).join('')}</div>`}
+function isTeamReady(matchId,teamId){return st.readyRows.some(r=>r.match_id===matchId&&r.team_id===teamId)}
+function renderReadyBoard(m,admin=false){
+  if(m.status!=='pending'||!m.team_a_id||!m.team_b_id)return '';
+  const ids=[m.team_a_id,m.team_b_id];const slot=mySlot();const myTeam=slot?.team_id;
+  const rows=ids.map(id=>{
+    const slots=st.event.slots.filter(s=>s.team_id===id);
+    const registered=slots.filter(s=>s.profile_id).length;
+    const selected=slots.filter(s=>st.weaponMap.has(s.preferred_weapon)).length;
+    const ready=isTeamReady(m.id,id);
+    const canReady=slots.length===4&&selected===4&&(st.event.tournament.is_test||registered===4);
+    const canEdit=!admin&&myTeam===id&&!st.event.tournament.is_test;
+    return `<div class="ready-team ${ready?'is-ready':''}"><div class="between"><strong>${esc(teamName(id))}</strong><span class="badge ${ready?'badge-live':''}">${ready?'✓ 準備OK':'準備中'}</span></div><div class="ready-count">ブキ ${selected}/4${!st.event.tournament.is_test?` · 参加 ${registered}/4`:''}</div>${canEdit?`<button class="btn ${ready?'btn-secondary':'btn-primary'} btn-block" data-action="team-ready" data-ready="${ready?'0':'1'}" data-match="${m.id}" ${!ready&&!canReady?'disabled':''}>${ready?'準備OKを取り消す':'このチームは準備OK'}</button>`:''}${!ready&&!canReady?'<p class="hint">4人全員の参加とブキ登録が必要です。</p>':''}</div>`;
+  }).join('');
+  return `<section class="ready-panel margin-top" aria-label="試合準備状況"><div class="between ready-heading"><div><div class="kicker">TEAM CHECK-IN</div><h3>両チームの準備状況</h3></div><span class="badge">両チームOKで自動開始</span></div><div class="ready-grid">${rows}</div><p class="hint">準備OKはチームで1人が押せば完了。ブキを変更するとそのチームの準備OKは解除されます。勝敗は運営者が確定します。</p></section>`;
+}
 function personalControl(m){const slot=mySlot(),me=slot&&matchOfMe(m);if(!me)return `<section class="personal-card"><div class="kicker">SPECTATOR MODE</div><h3>この試合の状況を確認中</h3><p class="sub small">この試合の選手ではないため、ストック情報は閲覧のみ可能です。</p></section>`;
   const mp=st.matchPlayers.find(x=>x.slot_id===slot.id);const sc=matchScore(m.status==='pending'?null:mp,slot,m);const pending=pendingFor(m.id);const allowSelect=m.status==='pending'||(m.status==='live'&&(mp?.deaths||0)===0&&pending.length===0);const selectVal=m.status==='pending'?slot.preferred_weapon:(mp?.weapon_name||slot.preferred_weapon);const recent=st.recent.filter(w=>st.weaponMap.has(w)).slice(0,3);
   return `<section class="personal-card"><div class="kicker">MY STOCK / ${esc(slot.display_name)}</div><div class="form-group"><label class="field-label" for="match-search">使用ブキ ${allowSelect?'':'（変更不可）'}</label>${allowSelect?'<input id="match-search" class="field" type="search" data-weapon-filter="match" placeholder="ブキ名で検索" aria-label="ブキ検索" style="margin-bottom:8px">':''}<select id="match-weapon" data-change="match-weapon" class="field" ${allowSelect?'':'disabled'}><option value="">ブキを選択</option>${st.weapons.map(w=>`<option value="${esc(w.name)}" ${selectVal===w.name?'selected':''}>${esc(w.name)} — ${w.stock}</option>`).join('')}</select>${allowSelect?`<div class="actions margin-top">${recent.map(w=>`<button class="btn btn-secondary btn-small" data-action="recent-weapon" data-weapon="${esc(w)}">${esc(w)}</button>`).join('')}</div>`:''}</div><div class="stock-figure"><div class="sub small strong">残りストック</div><span class="stock-big ${sc.remain===0?'danger':''} mono">${sc.remain??'—'}</span><span class="stock-out"> / ${sc.max??'—'}</span>${dots(sc.remain||0,sc.max||0)}<div class="sub small">デス ${sc.deaths}回</div></div>${sc.remain===0?'<div class="error-note">ストック切れ。リスポーンから出ない。</div>':''}<div class="stack margin-top"><button class="btn btn-death" data-action="death" ${m.status!=='live'||sc.max===null||sc.remain<=0?'disabled':''}>＋ 1デス記録</button><button class="btn btn-secondary btn-block" data-action="undo" ${m.status!=='live'||sc.deaths<=0?'disabled':''}>↶ 直前の記録を取り消し</button></div><div class="between margin-top"><span class="sub small">${m.status==='pending'?'試合開始待ち':'操作は自動保存'}</span><button class="btn btn-text" data-action="wake">画面消灯防止 ${st.wakeEnabled?'ON':'OFF'}</button></div>${pending.length?`<div class="warning margin-top"><strong>未同期 ${pending.length}件</strong>：この端末内に保存中。<button class="btn btn-secondary btn-small" data-action="retry-sync">再送</button> <button class="btn btn-text" data-action="clear-pending">記録を破棄</button></div>`:m.status==='live'?'<p class="hint">同期済みのデス数は全員に共有されます。</p>':''}</section>`;
 }
 function matchSelector(m){return `<button class="card-btn ${m.id===st.matchId?'active':''}" data-action="pick-match" data-id="${m.id}"><div class="between"><span class="small sub">R${m.round_index} / #${m.match_index}</span>${badge(m.status)}</div><div class="card-title">${esc(teamName(m.team_a_id))} <span class="sub">vs</span> ${esc(teamName(m.team_b_id))}</div></button>`}
 function renderMatches(admin){const d=event();if(!d.matches.length)return `<div class="empty">対戦表はまだありません。${admin?'主催者が対戦表を生成してください。':'主催者の設定をお待ちください。'}</div>`;
-  const m=currMatch();return `<div class="grid-aside"><section><div class="section-head"><h2>対戦一覧</h2><span class="badge">${d.matches.length}試合</span></div><div class="matches-list">${d.matches.map(matchSelector).join('')}</div></section><section><div class="section-head"><h2>${m?`${esc(teamName(m.team_a_id))} vs ${esc(teamName(m.team_b_id))}`:'試合を選択'}</h2>${m?badge(m.status):''}</div>${m?`${renderDuel(m)}${admin?adminMatchControls(m):''}<div class="control-grid">${admin?`<section class="personal-card"><div class="kicker">ORGANIZER VIEW</div><h3>全選手のストックを確認</h3><p class="sub small">選手のデス記録は本人が操作します。ここからは勝敗と試合進行のみ管理できます。</p></section>`:personalControl(m)}<div class="scoreboard">${teamBoard(m.team_a_id,m,false)}${teamBoard(m.team_b_id,m,true)}</div></div><p class="detail-note">ブキ未選択の選手がいる間、チームの合計ストックは「未確定」と表示します。通信切断中の本人の操作は他端末には未反映です。</p>`:''}</section></div>`;
+  const m=currMatch();return `<div class="grid-aside"><section><div class="section-head"><h2>対戦一覧</h2><span class="badge">${d.matches.length}試合</span></div><div class="matches-list">${d.matches.map(matchSelector).join('')}</div></section><section><div class="section-head"><h2>${m?`${esc(teamName(m.team_a_id))} vs ${esc(teamName(m.team_b_id))}`:'試合を選択'}</h2>${m?badge(m.status):''}</div>${m?`${renderReadyBoard(m,admin)}${renderDuel(m)}${admin?adminMatchControls(m):''}<div class="control-grid">${admin?`<section class="personal-card"><div class="kicker">ORGANIZER VIEW</div><h3>全選手のストックを確認</h3><p class="sub small">選手のデス記録は本人が操作します。ここからは勝敗と試合進行のみ管理できます。</p></section>`:personalControl(m)}<div class="scoreboard">${teamBoard(m.team_a_id,m,false)}${teamBoard(m.team_b_id,m,true)}</div></div><p class="detail-note">ブキ未選択の選手がいる間、チームの合計ストックは「未確定」と表示します。通信切断中の本人の操作は他端末には未反映です。</p>`:''}</section></div>`;
 }
-function adminMatchControls(m){if(m.status==='finished')return `<div class="success-note margin-top">勝者：${esc(teamName(m.winner_id))}</div>`;
+function adminMatchControls(m){if(m.status==='finished')return `<div class="success-note margin-top result-complete"><div><strong>勝者：${esc(teamName(m.winner_id))}</strong><p class="hint">誤確定は記録を残して訂正できます。次の試合が始まっている場合は訂正できません。</p></div><button class="btn btn-secondary btn-small" data-action="admin-revise-result" data-id="${m.id}">結果を訂正・再開</button></div>`;
   if(!m.team_a_id||!m.team_b_id)return '<div class="warning margin-top">両チームが確定していません。</div>';
-  return `<div class="panel panel-pad margin-top"><div class="between"><div><strong>${m.status==='pending'?'試合開始待ち':'試合進行中'}</strong><div class="sub small">試合開始時にブキと初期ストックを記録します。</div></div><button class="btn btn-primary" data-action="${m.status==='pending'?'admin-start-match':'admin-finish-match'}" data-id="${m.id}">${m.status==='pending'?'試合を開始':'勝敗を確定'}</button></div></div>`;
+  return `<div class="panel panel-pad margin-top"><div class="between"><div><strong>${m.status==='pending'?'両チームの準備待ち':'試合進行中'}</strong><div class="sub small">${m.status==='pending'?'2チームの準備OKで自動開始します。':'勝敗は運営者が確認して確定します。'}</div></div>${m.status==='live'?`<button class="btn btn-primary" data-action="admin-finish-match" data-id="${m.id}">勝敗を確定</button>`:st.event.tournament.is_test?`<button class="btn btn-secondary" data-action="admin-start-match" data-id="${m.id}">テスト手動開始</button>`:''}</div></div>`;
 }
 function renderSchedule(){const d=event();if(!d.matches.length)return '<div class="empty">対戦表は未作成です。</div>';
   const rounds=[...new Set(d.matches.map(m=>m.round_index))];
@@ -138,7 +163,7 @@ function renderAdminHome(){const rows=st.adminEvents.map(t=>`<button class="card
   el.innerHTML=`<div class="shell main"><div class="page-head"><div><div class="kicker">ADMIN CONSOLE</div><h1>大会管理</h1><p class="sub mb0">プレイヤー名とチームを先に登録。参加者は一覧から自分の名前を選択します。</p></div><span class="badge badge-dark">認証済み運営者</span></div><div class="notice margin-top"><div class="between"><span>PCでもログインできるよう、現在の管理者アカウントにパスワードを設定できます。</span><button type="button" class="btn btn-secondary btn-small" data-action="admin-password">パスワード設定</button></div></div><div class="grid-aside margin-top"><section class="panel panel-pad"><div class="kicker">CREATE EVENT</div><h2>新しい大会</h2><form id="admin-create-form"><div class="form-group"><label class="field-label" for="event-name">大会名</label><input id="event-name" name="name" class="field" maxlength="60" required placeholder="例：ストック杯"></div><div class="form-group"><label class="field-label" for="event-format">形式</label><select id="event-format" name="format" class="field"><option value="elimination">トーナメント</option><option value="round_robin">総当たり</option></select></div><div class="form-group"><label class="field-label" for="event-teams">チーム名（2～16、1行1チーム）</label><textarea id="event-teams" name="teams" class="field textarea" required>チーム A\nチーム B\nチーム C\nチーム D</textarea></div><label class="test-check"><input type="checkbox" name="test_mode" value="1"><span><strong>1台で検証するテスト大会として作成</strong><small>8人分の名前を自動設定・プレイヤーのログイン不要・本番大会とは完全に分離</small></span></label><button type="submit" class="btn btn-primary btn-block">大会の枠を作る</button></form><p class="hint">通常大会はこれまで通り、名前登録→参加受付。テスト大会は非公開のまま運営者が全員を操作できます。</p></section><section><div class="section-head"><h2>作成済みの大会</h2><span class="badge">${st.adminEvents.length}件</span></div>${rows?`<div class="stack">${rows}</div>`:'<div class="empty">大会がありません。</div>'}</section></div></div>`;
 }
 function adminRoster(){const e=st.event;return `<div class="section-head"><div><div class="kicker">ROSTER / ORGANIZER ONLY</div><h2>選手名を事前登録</h2></div>${e.tournament.is_test?'<span class="badge badge-dark">テスト大会：受付不要</span>':`<button class="btn ${e.tournament.is_open?'btn-danger':'btn-primary'}" data-action="admin-toggle-open">${e.tournament.is_open?'参加受付を停止':'参加受付を開始'}</button>`}</div><div class="notice">${e.tournament.is_test?'これは非公開のテスト大会です。仮の8選手を管理画面で操作できます。名前の編集は任意です。':'参加者には名前を選ぶだけにしてもらいます。名前が誤って取得された場合、下の「移動・入替」または「登録解除」で直せます。'}</div><div class="grid-2 margin-top">${e.teams.map(team=>{const slots=e.slots.filter(s=>s.team_id===team.id).sort((a,b)=>a.position-b.position);return `<section class="team-roster"><form data-form="roster" data-team="${team.id}"><div class="between"><h3>TEAM ${team.seed}</h3><button type="submit" class="btn btn-primary btn-small">このチームを保存</button></div><div class="form-group"><label class="field-label">チーム名</label><input class="field" name="teamName" maxlength="36" value="${esc(team.name)}" required></div><div class="roster-edit-grid">${slots.map(s=>`<div><label class="field-label">${s.position}番 ${s.profile_id?'●':''}</label><input class="field" name="player${s.position}" maxlength="24" value="${esc(s.display_name||'')}" placeholder="選手名" required></div>`).join('')}</div></form></section>`}).join('')}</div><div class="section-head"><h2>プレイヤーの割り当て修正</h2><span class="badge">${e.slots.filter(s=>s.profile_id).length}/${e.slots.length} 登録</span></div><section class="panel panel-pad"><p class="sub small">登録された端末の個人IDを確認できます。間違って選んだ選手を移動するときは、移動先の名前を選んでください。移動先にも登録者がいる場合は入れ替えます。</p><div class="stack">${e.slots.filter(s=>s.profile_id).map(s=>{const options=e.slots.filter(x=>x.id!==s.id).map(x=>`<option value="${x.id}">${esc(teamName(x.team_id))} / ${esc(x.display_name||'未設定')}${x.profile_id?'（登録済み）':''}</option>`).join('');return `<div class="admin-slot"><span>${avatar(e.profiles.find(p=>p.id===s.profile_id)?.color)}</span><div style="flex:1;min-width:145px"><div class="admin-slot-name">${esc(s.display_name||'名前未設定')} <span class="sub small">(${esc(teamName(s.team_id))})</span></div><div class="admin-slot-id">ID: ${esc(s.profile_id)}</div></div><div class="actions"><button class="btn btn-secondary btn-small" data-action="copy-id" data-id="${s.profile_id}">IDコピー</button><select class="field" id="move-${s.id}" aria-label="移動先">${options}</select><button class="btn btn-secondary btn-small" data-action="admin-move" data-id="${s.id}">移動・入替</button><button class="btn btn-danger btn-small" data-action="admin-release" data-id="${s.id}">解除</button></div></div>`}).join('')||'<div class="sub">まだ誰も参加していません。</div>'}</div><div class="warning margin-top">試合のストック記録が作成された後は、履歴を壊さないよう選手の移動・解除を禁止しています。表示名の修正は可能です。</div><div class="divider-soft"></div><h3>端末紛失・再接続用のID付け替え</h3><p class="sub small">端末が変わり匿名IDが失われた場合に使います。本人の新しい端末に表示される「個人ID」を入力してください。元のストック記録はそのまま保持します。</p><form id="admin-rebind-form"><div class="form-group"><label class="field-label" for="rebind-slot">対象の選手</label><select id="rebind-slot" name="slot" class="field" required>${e.slots.filter(x=>x.profile_id).map(x=>`<option value="${x.id}">${esc(teamName(x.team_id))} / ${esc(x.display_name||'')}</option>`).join('')}</select></div><div class="form-group"><label class="field-label" for="rebind-user">新端末の個人ID（UUID）</label><input id="rebind-user" class="field" name="user" required placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" pattern="[a-fA-F0-9-]{36}"></div><button type="submit" class="btn btn-secondary">この選手を新しいIDに付け替える</button></form></section>`}
-function adminSchedule(){return `<div class="section-head"><div><div class="kicker">MATCH CONTROL</div><h2>対戦の進行</h2></div>${st.event.matches.length?'':`<button class="btn btn-primary" data-action="admin-generate">対戦表を自動生成</button>`}</div><div class="notice">${st.event.tournament.is_test?'テスト大会です。「8人テスト」タブで選手8人を1台から操作できます。試合開始・勝敗確定は「8人テスト」タブからも操作できます。':'勝敗は実際の対戦結果を確認して運営者が確定します。進行中は選手本人だけがデス数を更新できます。'}</div><div class="margin-top">${renderMatches(true)}</div>`}
+function adminSchedule(){return `<div class="section-head"><div><div class="kicker">MATCH CONTROL</div><h2>対戦の進行</h2></div>${st.event.matches.length?'':`<button class="btn btn-primary" data-action="admin-generate">対戦表を自動生成</button>`}</div><div class="notice">${st.event.tournament.is_test?'テスト大会です。「8人テスト」タブで選手8人を1台から操作できます。試合開始・勝敗確定は「8人テスト」タブからも操作できます。':'勝敗は実際の対戦結果を確認して運営者が確定します。進行中は選手本人だけがデス数を更新できます。'}</div><div class="margin-top">${renderMatches(true)}</div>${st.resultHistory.length?`<section class="panel panel-pad margin-top"><h3>勝敗の訂正履歴</h3><div class="stack">${st.resultHistory.map(h=>`<div class="audit-row"><strong>${h.action==='correct'?'勝者訂正':'試合再開'}</strong> · ${esc(new Date(h.changed_at).toLocaleString('ja-JP'))}<div class="sub small">${esc(teamName(h.previous_winner))} → ${h.new_winner?esc(teamName(h.new_winner)):'未確定'} / ${esc(h.reason)}</div></div>`).join('')}</div></section>`:''}`}
 // 8人テストは通常の匿名セッションに成り代わらず、テスト大会でのみ運営者RPCを使う。
 function renderTestPanel(){
   const d=st.event,m=currMatch();
@@ -166,6 +191,7 @@ function renderTestPanel(){
     ${m.status==='pending'?`<button type="button" class="btn btn-primary" data-action="admin-start-match" data-id="${m.id}">▶ 試合を開始</button>`:m.status==='live'?`<button type="button" class="btn btn-primary" data-action="admin-finish-match" data-id="${m.id}">勝敗を確定</button>`:`<span class="badge">終了済み</span>`}</div>
   </section>
   ${renderDuel(m)}
+  ${m.status==='pending'?`<section class="ready-panel margin-top"><div class="kicker">TEST TEAM READY</div><h3>テスト：チームごとの準備OK</h3><div class="ready-grid">${[m.team_a_id,m.team_b_id].map(t=>{const n=slots.filter(s=>s.team_id===t&&st.weaponMap.has(s.preferred_weapon)).length;const done=isTeamReady(m.id,t);return `<div class="ready-team ${done?'is-ready':''}"><div class="between"><strong>${esc(teamName(t))}</strong><span class="badge">${n}/4 ブキ</span></div><button class="btn ${done?'btn-secondary':'btn-primary'} btn-block" data-action="admin-test-ready" data-team="${t}" data-ready="${done?'0':'1'}" ${!done&&n<4?'disabled':''}>${done?'準備OKを解除':'チーム準備OK'}</button></div>`}).join('')}</div><p class="hint">2チームが準備OKになると自動開始。手動開始は既存機能の検証用に残しています。</p></section>`:''}
   <div class="test-layout margin-top"><section class="panel panel-pad"><div class="between"><div><div class="kicker">SELECT PLAYER</div><h3>操作する選手を選択</h3></div><span class="badge">${slots.length}枠</span></div><div class="test-person-grid margin-top">${playerBtns}</div></section>
   <section class="panel panel-pad test-controller"><div class="between"><div><div class="kicker">PLAYER CONTROL</div><h2>${esc(mine?.display_name||'選手')} <span class="sub small">(${esc(teamName(mine?.team_id))})</span></h2></div>${badge(m.status)}</div>
   <div class="form-group"><label class="field-label" for="test-weapon">この選手の使用ブキ ${canWeapon?'':'（変更不可）'}</label><input class="field" id="test-search" type="search" data-weapon-filter="test" placeholder="65ブキから検索" ${canWeapon?'':'disabled'} style="margin-bottom:8px"><select class="field" id="test-weapon" data-change="test-weapon" ${canWeapon?'':'disabled'}><option value="">ブキを選択</option>${st.weapons.map(w=>`<option value="${esc(w.name)}" ${currentWeapon===w.name?'selected':''}>${esc(w.name)} — ${w.stock}</option>`).join('')}</select></div>
@@ -173,7 +199,7 @@ function renderTestPanel(){
   <button type="button" class="btn btn-death btn-block margin-top" data-action="admin-test-death" ${m.status!=='live'||score?.remain===null||score.remain<=0?'disabled':''}>＋ 1デス記録</button>
   <button type="button" class="btn btn-secondary btn-block margin-top" data-action="admin-test-undo" ${m.status!=='live'||!score?.deaths?'disabled':''}>↶ デスを取り消す</button>
   ${m.status==='pending'?`<div class="test-tools"><button type="button" class="btn btn-secondary btn-block" data-action="admin-test-fill">未設定の8人にスプラシューターを一括設定</button><p class="hint">ブキは試合開始前、または初デス前に変更可能。上部の「試合を開始」を押してテストを始められます。</p></div>`:''}
-  ${m.status==='finished'?'<p class="hint">この試合は終了しました。履歴は閲覧のみです。</p>':''}</section></div>
+  ${m.status==='finished'?`<p class="hint">この試合は終了しました。デス履歴は保持されます。</p><button class="btn btn-secondary btn-block" data-action="admin-revise-result" data-id="${m.id}">結果を訂正・再開</button>`:''}</section></div>
   <div class="section-head"><div><div class="kicker">LIVE SCORE</div><h2>8人全員のストック</h2></div><span class="badge">${esc(fmt(m.status))}</span></div><div class="scoreboard">${teamBoard(m.team_a_id,m,false)}${teamBoard(m.team_b_id,m,true)}</div>
   <div class="notice margin-top">このモードは「テストとして作成」した大会にのみ表示されます。通常の選手のログイン情報・登録状況・デス履歴には触れません。</div>`;
 }
@@ -200,13 +226,14 @@ async function loadEvent(id,first=false){const c=client();if(!c)return;if(st.loa
   if(first){unsubscribe();st.eventId=id;st.event=null;st.matchId=null;st.testSlotId=null;st.tab='match';st.adminTab='roster';st.view=ADMIN_MODE?'admin-event':'event';show()}
   st.loading=true;
   try{
-    const [t,teams,slots,matches]=await Promise.all([
+    const [t,teams,slots,matches,ready]=await Promise.all([
       c.from('tournaments').select('id,organizer_id,name,format,status,created_at,is_open,is_test').eq('id',id).single(),
       c.from('teams').select('id,tournament_id,seed,name').eq('tournament_id',id).order('seed'),
       c.from('player_slots').select('id,tournament_id,team_id,position,display_name,profile_id,preferred_weapon').eq('tournament_id',id),
-      c.from('matches').select('id,tournament_id,round_index,match_index,team_a_id,team_b_id,status,winner_id,next_match_id,advance_to_side').eq('tournament_id',id).order('round_index').order('match_index')
+      c.from('matches').select('id,tournament_id,round_index,match_index,team_a_id,team_b_id,status,winner_id,next_match_id,advance_to_side').eq('tournament_id',id).order('round_index').order('match_index'),
+      c.from('match_team_ready').select('match_id,team_id,ready_at').eq('tournament_id',id)
     ]);
-    for(const v of [t,teams,slots,matches])check(v);
+    for(const v of [t,teams,slots,matches,ready])check(v);
     const data={tournament:t.data,teams:teams.data||[],slots:slots.data||[],matches:matches.data||[],profiles:[]};
     const pids=[...new Set(data.slots.map(s=>s.profile_id).filter(Boolean))];
     if(pids.length)data.profiles=check(await c.from('profiles').select('id,nickname,color').in('id',pids))||[];
@@ -215,6 +242,11 @@ async function loadEvent(id,first=false){const c=client();if(!c)return;if(st.loa
       if(events.length){const ack=check(await c.from('death_events').select('event_id').in('event_id',events));const done=new Set((ack||[]).map(x=>x.event_id));if(done.size){st.pending=st.pending.filter(x=>!done.has(x.eventId));savePending()}}
     }
     if(st.eventId!==id)return;
+    st.readyRows=ready.data||[];
+    if(ADMIN_MODE&&t.data.organizer_id===st.adminUser?.id){
+      try{st.resultHistory=await rpc('admin_match_result_history',{p_tournament:id},st.adminClient)||[]}
+      catch(err){st.resultHistory=[];console.warn('訂正履歴を取得できません',err)}
+    }else st.resultHistory=[];
     st.event=data;let selected=data.matches.find(m=>m.id===st.matchId);if(!selected)selected=pickEventDefault(data);st.matchId=selected?.id||null;
     st.matchPlayers=[];
     if(selected&&selected.status!=='pending')st.matchPlayers=check(await c.from('match_players').select('match_id,slot_id,weapon_name,base_stock,deaths,updated_at').eq('match_id',selected.id))||[];
@@ -230,7 +262,7 @@ function refreshSoon(){if(!st.eventId||!['event','admin-event'].includes(st.view
   clearTimeout(st.refreshTimer);st.refreshTimer=setTimeout(()=>{if(st.loading)refreshSoon();else loadEvent(st.eventId)},350)
 }
 function subscribe(id){unsubscribe();const c=client();const ch=c.channel('splastock-v2-'+id+'-'+uuid().slice(0,8));
-  for(const table of ['matches','player_slots','match_players','teams'])ch.on('postgres_changes',{event:'*',schema:'public',table,filter:`tournament_id=eq.${id}`},refreshSoon);
+  for(const table of ['matches','player_slots','match_players','teams','match_team_ready'])ch.on('postgres_changes',{event:'*',schema:'public',table,filter:`tournament_id=eq.${id}`},refreshSoon);
   ch.on('postgres_changes',{event:'*',schema:'public',table:'tournaments',filter:`id=eq.${id}`},refreshSoon);
   ch.on('postgres_changes',{event:'*',schema:'public',table:'profiles'},refreshSoon);
   ch.subscribe(status=>{st.realtime=status;statusHeader();if(status==='SUBSCRIBED')refreshSoon()});st.channel=ch;
@@ -282,13 +314,31 @@ function getDialogParts(){
   return {dialog,body};
 }
 function confirmBox(title,message,cb){const {dialog,body}=getDialogParts();body.innerHTML=`<h2 id="dialog-title">${esc(title)}</h2><p class="sub">${esc(message)}</p>`;const f=()=>{dialog.removeEventListener('close',f);if(dialog.returnValue==='confirm')run(cb)};dialog.addEventListener('close',f);dialog.showModal()}
-function chooseWinner(m){const {dialog,body}=getDialogParts();body.innerHTML=`<h2 id="dialog-title">勝者を選択</h2><p class="sub">実際の試合結果を確認してから確定してください。取り消し機能はありません。</p><div class="stack">${[m.team_a_id,m.team_b_id].map(t=>`<button type="button" class="btn btn-secondary btn-block" data-action="admin-confirm-winner" data-id="${m.id}" data-team="${t}">${esc(teamName(t))} が勝利</button>`).join('')}</div>`;dialog.showModal()}
+function chooseWinner(m){const {dialog,body}=getDialogParts();body.innerHTML=`<h2 id="dialog-title">勝者を選択</h2><p class="sub">実際の試合結果を確認してから確定してください。必要に応じて運営者が結果を訂正できます。</p><div class="stack">${[m.team_a_id,m.team_b_id].map(t=>`<button type="button" class="btn btn-secondary btn-block" data-action="admin-confirm-winner" data-id="${m.id}" data-team="${t}">${esc(teamName(t))} が勝利</button>`).join('')}</div>`;dialog.showModal()}
+function reviseResultDialog(m){
+  if(!ADMIN_MODE||!st.isAdmin||m.status!=='finished')throw new Error('確定済みの試合だけ訂正できます');
+  const {dialog,body}=getDialogParts();
+  body.innerHTML=`<h2 id="dialog-title">勝敗の訂正・試合の再開</h2><p class="sub">次の試合が始まっている場合はデータベースが訂正を拒否します。デス履歴は削除されません。</p><div class="form-group"><label class="field-label" for="revision-action">訂正方法</label><select class="field" id="revision-action"><option value="correct">勝者を訂正する</option><option value="reopen">結果確定を取り消して試合を再開</option></select></div><div class="form-group"><label class="field-label" for="revision-winner">正しい勝者（勝者訂正の場合）</label><select class="field" id="revision-winner">${[m.team_a_id,m.team_b_id].map(id=>`<option value="${id}" ${id!==m.winner_id?'selected':''}>${esc(teamName(id))}</option>`).join('')}</select></div><div class="form-group"><label class="field-label" for="revision-reason">訂正理由（3文字以上、履歴に保存）</label><textarea id="revision-reason" class="field" rows="3" maxlength="300" placeholder="例：試合結果の入力を間違えたため"></textarea></div>`;
+  const handler=()=>{dialog.removeEventListener('close',handler);if(dialog.returnValue!=='confirm')return;
+    const action=document.getElementById('revision-action')?.value;
+    const winner=document.getElementById('revision-winner')?.value;
+    const reason=document.getElementById('revision-reason')?.value.trim()||'';
+    if(reason.length<3){notify('訂正理由は3文字以上で入力してください',true);return}
+    confirmBox('最終確認',action==='correct'?`「${teamName(winner)}」に勝者を変更します。訂正記録が残ります。`:'結果確定を取り消し、同じストック履歴を保持したまま試合を再開します。',async()=>{
+      await rpc('admin_revise_match_result',{p_match:m.id,p_action:action,p_winner:action==='correct'?winner:null,p_reason:reason});
+      notify(action==='correct'?'勝利チームを訂正しました':'試合を再開しました');
+      await loadEvent(st.eventId);
+    });
+  };dialog.addEventListener('close',handler);dialog.showModal();
+}
 function clearPending(){const count=pendingFor(st.matchId).length;confirmBox('未同期デスを破棄',`${count}件の未同期記録を削除します。未送信のデスは共有されなくなります。運営者に伝えてから行ってください。`,async()=>{st.pending=st.pending.filter(x=>x.uid!==st.user.id||x.matchId!==st.matchId);savePending();show()})}
 async function copy(text){try{await navigator.clipboard.writeText(text);notify('IDをコピーしました')}catch{notify('コピーに失敗しました',true)}}
 async function goHome(){unsubscribe();if(ADMIN_MODE){if(st.isAdmin)await loadAdminHome();else{st.view='admin-login';show()}}else await loadPlayerHome()}
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b||b.disabled)return;const a=b.dataset.action;
   try{switch(a){
     case 'home':await run(goHome);break;
+    case 'help':st.helpReturn=st.view==='help'?'home':st.view;st.view='help';show();break;
+    case 'help-back':{const target=st.helpReturn||'home';st.view=target;if(target==='event'&&st.eventId)await run(()=>loadEvent(st.eventId));else show();break;}
     case 'quick':st.view='quick';show();break;
     case 'scroll-events':document.getElementById('events-section')?.scrollIntoView({behavior:'smooth'});break;
     case 'retry':st.bootError=null;await boot();break;
@@ -314,6 +364,8 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-acti
       await loadEvent(st.eventId);notify(`デス記録を更新しました（${saved}回）`);
     });break;
     case 'recent-weapon':await run(()=>setWeapon(b.dataset.weapon));break;
+    case 'team-ready':await run(async()=>{const started=await rpc('team_set_ready',{p_match:b.dataset.match,p_ready:b.dataset.ready==='1'},st.playerClient);await loadEvent(st.eventId);notify(started?'両チーム準備OK！試合が開始されました':'チームの準備状態を更新しました')});break;
+    case 'admin-test-ready':await run(async()=>{if(!st.event?.tournament.is_test)throw new Error('テスト大会だけ操作できます');const started=await rpc('admin_test_set_ready',{p_match:st.matchId,p_team:b.dataset.team,p_ready:b.dataset.ready==='1'});await loadEvent(st.eventId);notify(started?'両チームの準備完了で試合開始':'テストチームの準備状態を更新しました')});break;
     case 'death':await addDeath(1);break;
     case 'undo':await addDeath(-1);break;
     case 'wake':await toggleWake();break;
@@ -335,8 +387,9 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-acti
     case 'admin-toggle-open':confirmBox('参加受付の変更',st.event.tournament.is_open?'参加受付を停止します。既存の参加者の試合データは維持されます。':'全選手の名前が入力されている必要があります。受付を開始しますか？',async()=>{await rpc('admin_set_open',{p_tournament:st.eventId,p_open:!st.event.tournament.is_open});await loadEvent(st.eventId);notify('受付状態を変更しました')});break;
     case 'admin-generate':confirmBox('対戦表を生成','作成後は大会形式を変更できません。選手の割り当ては試合開始前なら修正可能です。',async()=>{const n=await rpc('admin_generate_schedule',{p_tournament:st.eventId});notify(`${n}試合の対戦表を作成しました`);if(st.adminTab!=='test')st.adminTab='matches';await loadEvent(st.eventId)});break;
     case 'admin-start-match':confirmBox('試合開始','使用ブキと初期ストックを保存して試合を開始します。未選択の選手は初デス前までブキを選べます。',async()=>{await rpc('admin_start_match',{p_match:b.dataset.id});await loadEvent(st.eventId);notify('試合を開始しました')});break;
+    case 'admin-revise-result':{const m=st.event.matches.find(x=>x.id===b.dataset.id);if(m)reviseResultDialog(m);break}
     case 'admin-finish-match':{const m=st.event.matches.find(x=>x.id===b.dataset.id);if(m)chooseWinner(m);break}
-    case 'admin-confirm-winner':{document.getElementById('confirm-dialog').close();const team=b.dataset.team,match=b.dataset.id;confirmBox('勝敗を確定',`${teamName(team)}の勝利として確定します。戻す機能はありません。`,async()=>{await rpc('admin_finish_match',{p_match:match,p_winner:team});notify('勝敗を確定しました');st.matchId=null;await loadEvent(st.eventId)});break}
+    case 'admin-confirm-winner':{document.getElementById('confirm-dialog').close();const team=b.dataset.team,match=b.dataset.id;confirmBox('勝敗を確定',`${teamName(team)}の勝利として確定します。誤りがあれば運営者の訂正機能で修正できます。`,async()=>{await rpc('admin_finish_match',{p_match:match,p_winner:team});notify('勝敗を確定しました');st.matchId=null;await loadEvent(st.eventId)});break}
     case 'copy-id':await copy(b.dataset.id);break;
     case 'admin-move':{const from=b.dataset.id,to=document.getElementById('move-'+from)?.value;const s=st.event.slots.find(x=>x.id===from),dest=st.event.slots.find(x=>x.id===to);if(!dest)return;confirmBox('選手の割り当て修正',`${s.display_name} のアカウントを ${dest.display_name} に移動します。移動先が登録済みなら2人のアカウントを交換します。`,async()=>{await rpc('admin_move_player',{p_from:from,p_to:to});notify('割り当てを修正しました');await loadEvent(st.eventId)});break}
     case 'admin-release':{const s=st.event.slots.find(x=>x.id===b.dataset.id);confirmBox('登録を解除',`${s.display_name} の登録を解除します。同じ人は再度名前を選んで参加できます。`,async()=>{await rpc('admin_release_player',{p_slot:b.dataset.id});notify('登録を解除しました');await loadEvent(st.eventId)});break}
