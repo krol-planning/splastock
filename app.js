@@ -1,334 +1,310 @@
-/*
- * SPLASTOCK — static GitHub Pages client.
- * weapons.json is the immutable source of the original 65 weapons and stock counts.
- * Sync requires config.js + schema.sql on Supabase. Only PUBLIC publishable keys here.
+/* SPLASTOCK V2
+ * - Weapon master is weapons.json; no weapon is defined or overwritten in this file.
+ * - Players: anonymous Supabase session, choose organizer-registered name, colored dot.
+ * - Organizer: independent email magic-link session + server-side allowlist.
+ * - Data updates use RPC / RLS; a hidden button never grants authorization.
  */
-const app = document.getElementById('app');
+const el = document.getElementById('app');
 const header = document.getElementById('header-right');
-const safeStorage = {
-  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
-  set(key,value) { try { localStorage.setItem(key,value); return true; } catch { return false; } },
+const ADMIN_MODE = new URLSearchParams(location.search).get('admin') === '1';
+const COLORS = ['#111827','#64748b','#2563eb','#0891b2','#059669','#d97706','#dc2626','#db2777'];
+const config = window.SPLASTOCK_CONFIG || {};
+const configured = /^https:\/\/[a-z0-9.-]+\.supabase\.co\/?$/i.test(config.supabaseUrl||'') &&
+  typeof config.supabasePublishableKey === 'string' && config.supabasePublishableKey.length > 12;
+const store = {
+  get(k){try{return localStorage.getItem(k)}catch{return null}},
+  set(k,v){try{localStorage.setItem(k,v);return true}catch{return false}}
 };
-const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const AVR = ['🦑','🐙','🐟','⚡','🌊','🌀','🎯','🐡','🦈','✨'];
-const COLORS = ['#c5ff65','#bba4fa','#73dce8','#ff99b9','#ffcd7a'];
-const cfg = window.SPLASTOCK_CONFIG || {};
-const configured = /^https:\/\/[a-z0-9.-]+\.supabase\.co\/?$/i.test((cfg.supabaseUrl || '').replace(/\/$/,'')) &&
-  typeof cfg.supabasePublishableKey === 'string' && cfg.supabasePublishableKey.trim().length > 12;
-const state = {
-  weapons: [], weaponMap: new Map(), client: null, user: null, profile: null,
-  view: 'home', tab: 'match', tournaments: [], tournamentId: null,
-  detail: null, matchId: null, matchPlayers: [], invites: null,
-  avatar: '🦑', color: COLORS[0], nameDraft: '',
-  solo: readJSON('splastock_solo_v1',{weapon:'スプラシューター',deaths:0}),
-  recentWeapons: readJSON('splastock_recent_weapons_v1',['スプラシューター','シャープマーカー','リッター4K']),
-  pending: readJSON('splastock_pending_v1',[]),
-  busy: false, refreshing: false, draining: false, realtimeStatus:'disconnected',
-  channel: null, refreshTimer: null, wakeLock: null, wakeEnabled:false, error:null,
+function getJSON(k,otherwise){try{return JSON.parse(store.get(k)) ?? otherwise}catch{return otherwise}}
+const st = {
+  weapons:[],weaponMap:new Map(),
+  view:ADMIN_MODE?'admin-login':'home',tab:'match',adminTab:'roster',
+  playerClient:null,adminClient:null,user:null,adminUser:null,profile:null,isAdmin:false,
+  tournaments:[],publicEvents:[],adminEvents:[],
+  event:null,eventId:null,matchId:null,matchPlayers:[],roster:[],
+  claimEventId:null,claimColor:COLORS[0],
+  quick:getJSON('splastock_solo_v1',{weapon:'スプラシューター',deaths:0}),
+  recent:getJSON('splastock_recent_weapons_v1',['スプラシューター','シャープマーカー','リッター4K']),
+  pending:getJSON('splastock_pending_v1',[]),
+  busy:false,loading:false,draining:false,channel:null,refreshTimer:null,realtime:'disconnected',
+  wakeEnabled:false,wakeLock:null,bootError:null
 };
-function readJSON(key,fallback){ try { const x=JSON.parse(safeStorage.get(key)); return x ?? fallback; }catch{return fallback;} }
-function savePending(){ safeStorage.set('splastock_pending_v1',JSON.stringify(state.pending)); }
-function saveSolo(){ safeStorage.set('splastock_solo_v1',JSON.stringify(state.solo)); }
-function rememberWeapon(name){if(!state.weaponMap.has(name))return;state.recentWeapons=[name,...state.recentWeapons.filter(w=>w!==name)].slice(0,5);safeStorage.set('splastock_recent_weapons_v1',JSON.stringify(state.recentWeapons));}
-function UUID(){return (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:((r&3)|8)).toString(16);}));}
-function toast(message,isError=false){ const node=document.getElementById('toast'); node.textContent=message; node.className='toast active'+(isError?' error':''); clearTimeout(toast.timer); toast.timer=setTimeout(()=>node.className='toast',3700); }
-function formatName(code){return ({elimination:'トーナメント',round_robin:'総当たり'})[code]||code;}
-function fmtStatus(status){return ({draft:'準備中',active:'開催中',completed:'終了',pending:'開始前',live:'試合中',finished:'確定'})[status]||status;}
-function badge(status){return `<span class="pill ${status==='live'||status==='active'?'pill-lime':status==='finished'||status==='completed'?'pill-purple':''}">${esc(fmtStatus(status))}</span>`;}
-function playerSlotFor(tournamentId){return (state.detail?.slots || []).find(s=>s.tournament_id===tournamentId && s.profile_id===state.user?.id);}
-function nameOfTeam(id){return state.detail?.teams.find(t=>t.id===id)?.name || (id?'チーム不明':'未確定');}
-function chosenMatch(){return state.detail?.matches.find(m=>m.id===state.matchId) || null;}
-function scoreOf(mp,slot){const weapon=mp?.weapon_name || slot?.preferred_weapon;const max=mp?.base_stock ?? state.weaponMap.get(weapon)?.stock ?? null;const deaths=mp?.deaths ?? 0;return {weapon,max,deaths,remain:max===null?null:Math.max(0,max-deaths)};}
-function pendingFor(matchId){return state.pending.filter(e=>e.matchId===matchId&&e.uid===state.user?.id);}
-function currentDeaths(mp,slot,match){const base=scoreOf(mp,slot);const extra=pendingFor(match.id).reduce((n,e)=>n+e.delta,0);return {...base,deaths:base.deaths+extra,remain:base.max===null?null:Math.max(0,base.max-base.deaths-extra),queued:pendingFor(match.id).length};}
-function isOrganizer(){return state.detail?.tournament.organizer_id===state.user?.id;}
-function getInviteFromUrl(){let q=new URLSearchParams(location.search).get('invite'); return /^[a-f0-9-]{36}$/i.test(q||'')?q:null;}
-function removeInviteFromUrl(){const u=new URL(location.href);u.searchParams.delete('invite');history.replaceState(null,'',u.pathname+u.search+u.hash);}
-function homeButton(text='← ホーム'){return `<button class="btn btn-ghost btn-small" data-action="home">${esc(text)}</button>`;}
-function renderHeader(){
-  const connected=configured && state.user && navigator.onLine;
-  header.innerHTML=`<span class="status-chip"><span class="pulse ${navigator.onLine?'':'off'}"></span>${configured?(connected?(state.realtimeStatus==='SUBSCRIBED'?'同期接続':'オンライン'):'オフライン'):'簡易モード'}</span>${state.profile?`<button data-action="edit-profile" class="profile-chip"><span class="profile-avatar" style="background:${esc(state.profile.color)}">${esc(state.profile.avatar)}</span>${esc(state.profile.nickname)}</button>`:''}`;
+const esc = v => String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{let r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16)}));
+const fmt = c => ({elimination:'トーナメント',round_robin:'総当たり',draft:'準備中',active:'開催中',completed:'終了',pending:'開始前',live:'進行中',finished:'確定済み'})[c] || c;
+const badge = status => `<span class="badge ${status==='live'?'badge-live':status==='pending'?'badge-warn':''}">${esc(fmt(status))}</span>`;
+const avatar = (color,extra='') => `<span class="avatar ${extra}" style="background:${COLORS.includes(color)?color:COLORS[1]}"></span>`;
+const client = () => ADMIN_MODE?st.adminClient:st.playerClient;
+const event = () => st.event;
+const currMatch = () => st.event?.matches.find(m=>m.id===st.matchId);
+const mySlot = () => st.event?.slots.find(s=>s.profile_id===st.user?.id);
+const matchOfMe = m => Boolean(mySlot() && [m?.team_a_id,m?.team_b_id].includes(mySlot().team_id));
+const teamName = id => st.event?.teams.find(t=>t.id===id)?.name || '未確定';
+const pendingFor = mid => st.pending.filter(x=>x.matchId===mid && x.uid===st.user?.id);
+const savePending = () => store.set('splastock_pending_v1',JSON.stringify(st.pending));
+const saveQuick = () => store.set('splastock_solo_v1',JSON.stringify(st.quick));
+function notify(s,error=false){const t=document.getElementById('toast');t.textContent=String(s);t.className='toast active'+(error?' error':'');clearTimeout(notify.timer);notify.timer=setTimeout(()=>t.className='toast',4100)}
+function rememberWeapon(w){if(!st.weaponMap.has(w))return;st.recent=[w,...st.recent.filter(x=>x!==w)].slice(0,5);store.set('splastock_recent_weapons_v1',JSON.stringify(st.recent))}
+function check(res){if(res.error)throw new Error(res.error.message||'接続に失敗しました');return res.data}
+async function rpc(name,args={},use=client()){if(!use)throw new Error('オンライン接続がありません');return check(await use.rpc(name,args))}
+async function run(fn){if(st.busy)return;st.busy=true;try{await fn()}catch(e){console.error(e);notify(e.message||e,true)}finally{st.busy=false}}
+function fmtTinyId(id){return id ? `${id.slice(0,8)}…${id.slice(-4)}` : '未登録'}
+function statusHeader(){
+  const online = navigator.onLine && configured;
+  const isHome=st.view==='home'||st.view==='admin-home';
+  header.innerHTML=`<span class="connection"><span class="connection-dot ${online?'':'off'}"></span>${online?(st.realtime==='SUBSCRIBED'?'リアルタイム接続':'オンライン'):'簡易モード'}</span>`+
+    (ADMIN_MODE
+      ? `<span class="badge badge-dark">運営者</span>${st.isAdmin?'<button class="btn btn-secondary btn-small" data-action="admin-logout">ログアウト</button>':''}`
+      : st.profile ? `<span class="profile-pill" title="個人ID: ${esc(st.user?.id)}">${avatar(st.profile.color)}<span class="text-clip">${esc(mySlot()?.display_name||st.profile.nickname)}</span></span>` : '')+
+    (!isHome?`<button class="btn btn-secondary btn-small" data-action="home">ホーム</button>`:'');
 }
-function render(){renderHeader();
-  if(state.view==='profile')return renderProfile();
-  if(state.view==='solo')return renderSolo();
-  if(!configured)return renderDisconnected();
-  if(state.error)return renderError();
-  if(state.view==='tournament')return renderTournament();
-  renderHome();
+function show(){statusHeader();if(st.bootError&&st.view!=='quick'){renderError();return}
+  switch(st.view){
+    case 'quick':return renderQuick();
+    case 'claim':return renderClaim();
+    case 'color':return renderColorEditor();
+    case 'event':return renderEvent();
+    case 'admin-login':return renderAdminLogin();
+    case 'admin-home':return renderAdminHome();
+    case 'admin-event':return renderAdminEvent();
+    default:return renderHome();
+  }
 }
-function renderError(){app.innerHTML=`<div class="main"><div class="panel panel-pad"><h2>接続に問題が発生しました</h2><p class="muted">${esc(state.error)}</p><div class="actions"><button class="btn btn-accent" data-action="retry">再接続する</button><button class="btn btn-outline" data-action="solo">簡易モード</button></div></div></div>`;}
-function renderDisconnected(){
- app.innerHTML=`<div class="main standalone"><div class="eyebrow">LOCAL TOOL AVAILABLE</div><h1>ストック管理は、<br><span class="accent">このまま使えます。</span></h1><p class="subline">現在はSupabase未設定のため、大会のオンライン共有だけが無効です。65種類のブキ・デス記録を使える簡易モードは動きます。</p><div class="banner warn">同期・アバター・大会管理を有効にするには <code>schema.sql</code> をSupabaseで実行し、<code>config.js</code> にProject URLと公開可能キーを設定してください。詳しくは README.md。</div>${soloUI()}<div class="panel panel-pad mt-4"><h3>クラウド版で使える機能</h3><div class="pills"><span class="pill">🦑 アバター</span><span class="pill">🏆 トーナメント</span><span class="pill">🔄 総当たり</span><span class="pill">⚡ 8人同期</span><span class="pill">📱 オフライン記録</span></div></div></div>`;
-}
-function renderProfile(){
- const editing=Boolean(state.profile),name=state.nameDraft||state.profile?.nickname||'';
- app.innerHTML=`<div class="main"><div class="profile-wrap"><div class="eyebrow">PLAYER IDENTITY</div><h1>${editing?'アバター編集':'プレイヤーを作ろう。'}</h1><p class="subline">メールアドレスもパスワードも不要。サイト内だけで使うあなただけのアバターです。${editing?'':'同じブラウザでは次回から引き継がれます。'}</p><section class="panel panel-pad mt-4"><div class="avatar-preview"><div class="avatar-large" style="background:${esc(state.color)}">${esc(state.avatar)}</div><div><div class="muted small">YOUR PLAYER</div><h2 style="margin:4px 0 0">${esc(name||'名前を入力')}</h2></div></div><form id="profile-form"><div class="form-group"><label class="form-label" for="nickname">プレイヤー名（最大24文字）</label><input id="nickname" name="nickname" class="field" maxlength="24" required autocomplete="off" placeholder="プレイヤー名" value="${esc(name)}"></div><div class="form-group"><div class="form-label">アバターを選択</div><div class="avatar-picker">${AVR.map(a=>`<button type="button" data-action="avatar" data-value="${esc(a)}" class="avatar-option ${a===state.avatar?'active':''}" aria-label="${esc(a)}を選ぶ">${esc(a)}</button>`).join('')}</div></div><div class="form-group"><div class="form-label">アバターカラー</div><div class="colors">${COLORS.map(c=>`<button type="button" data-action="color" data-value="${c}" class="color-option ${c===state.color?'active':''}" style="background:${c}" aria-label="${c}"></button>`).join('')}</div></div><button class="btn btn-accent btn-block btn-lg" type="submit">${editing?'変更を保存':'このアバターで始める →'}</button>${editing?'<button type="button" class="btn btn-ghost btn-block mt-2" data-action="home">戻る</button>':''}</form></section><p class="small muted mt-3">匿名アカウントはブラウザデータを削除すると失われます。端末変更・引き継ぎは本バージョンでは未対応です。</p></div></div>`;
-}
+function renderError(){el.innerHTML=`<div class="shell main"><section class="panel panel-pad"><h2>接続できませんでした</h2><p class="sub">${esc(st.bootError)}</p><div class="actions"><button data-action="retry" class="btn btn-primary">再接続</button><button data-action="quick" class="btn btn-secondary">簡易計算を使う</button></div></section></div>`}
 function renderHome(){
- const items=state.tournaments.map(t=>`<button class="event-card" data-action="open-event" data-id="${t.id}" style="text-align:left;color:inherit"><span class="section-label">${t.organizer_id===state.user?.id?'ORGANIZER':'PLAYER'}</span><h3>${esc(t.name)}</h3><div class="pills">${badge(t.status)}<span class="pill">${esc(formatName(t.format))}</span></div><div class="row-between mt-3"><span class="small muted">${new Date(t.created_at).toLocaleDateString('ja-JP')}</span><strong class="accent">開く →</strong></div></button>`).join('');
- app.innerHTML=`<div class="main"><section class="hero"><div class="hero-content"><div class="eyebrow">COMMUNITY TOURNAMENT SYSTEM</div><h1>ストックを共有して、<br><span class="accent">勝負をもっと面白く。</span></h1><p class="subline">ブキを選んで、デスを記録するだけ。チーム全員と対戦相手の残りストックがリアルタイムでわかる。</p><div class="hero-actions"><button class="btn btn-accent btn-lg" data-action="solo">⚡ 簡易ストック管理</button><button class="btn btn-outline btn-lg" data-action="scroll-create">＋ 大会を作成</button></div></div></section><div class="section-head"><div><span class="section-label">YOUR EVENTS</span><h2>参加中の大会</h2></div><span class="pill">${state.tournaments.length} 件</span></div>${items?`<div class="grid-3">${items}</div>`:`<div class="empty"><span class="big-emoji">🏆</span>まだ大会がありません。<br>主催者から招待リンクをもらうか、自分で大会を作成してください。</div>`}<div class="grid-2 mt-4"><section class="panel panel-pad" id="create-section"><div class="eyebrow">FOR ORGANIZERS</div><h2>大会を作成</h2><p class="tagline">チーム名は改行で区切って入力。上から順番にシード番号が付きます。</p><form id="create-form"><div class="form-group"><label class="form-label" for="eventname">大会名</label><input class="field" id="eventname" name="eventname" required maxlength="60" placeholder="例：ストック杯 vol.1"></div><div class="form-group"><label class="form-label" for="format">大会形式</label><select class="field" id="format" name="format"><option value="elimination">トーナメント（BYE対応）</option><option value="round_robin">総当たり（1回戦総当たり）</option></select></div><div class="form-group"><label class="form-label" for="teams">参加チーム（2～16チーム / 各4人）</label><textarea class="field" id="teams" name="teams" required placeholder="チーム A&#10;チーム B&#10;チーム C&#10;チーム D">チーム A\nチーム B\nチーム C\nチーム D</textarea><p class="form-hint">生成後はチーム数と形式を変更できません。確定前に確認してください。</p></div><button class="btn btn-accent btn-block" type="submit">大会・チーム枠を作成 →</button></form></section><section class="panel panel-pad"><div class="eyebrow">JOIN A TEAM</div><h2>招待リンクで参加</h2><p class="subline small">主催者が発行した選手枠専用のURLを開くと、現在のアバターがその枠に登録されます。</p><form id="claim-form"><div class="form-group"><label class="form-label" for="inviteCode">招待コード（URL末尾のUUID）</label><input id="inviteCode" name="inviteCode" class="field" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" pattern="[0-9a-fA-F-]{36}"></div><button class="btn btn-outline btn-block" type="submit">招待コードで参加 →</button></form><div class="separator"></div><div class="pills"><span class="pill">登録作業は初回だけ</span><span class="pill">ブキは次回へ引き継ぎ</span><span class="pill">同じブラウザで継続利用</span></div><p class="small muted mt-4">※ 1人が同じ大会で複数の選手枠を取得することはできません。</p></section></div></div>`;
+  const mine=st.tournaments.map(t=>`<button class="card-btn" data-action="open-event" data-id="${t.id}"><div class="between"><span class="kicker">MY TOURNAMENT</span>${badge(t.status)}</div><div class="card-title">${esc(t.name)}</div><div class="card-sub">${fmt(t.format)} · チームのストックを確認する</div></button>`).join('');
+  const pub=st.publicEvents.filter(t=>!st.tournaments.some(x=>x.id===t.id)).map(t=>`<button class="card-btn" data-action="open-claim" data-id="${t.id}"><div class="between"><span class="kicker">参加受付中</span><span class="badge">${t.registered}/${Number(t.team_count)*4} 人</span></div><div class="card-title">${esc(t.name)}</div><div class="card-sub">${fmt(t.format)} · 登録された名前から自分を選ぶ</div></button>`).join('');
+  el.innerHTML=`<div class="shell main"><section class="banner-hero"><div><div class="kicker">PLAYER / STOCK TRACKING</div><h1>一つの画面で、<br>8人のストックを。</h1><p class="lead">自分のブキを選んで、デスしたら1タップ。味方と相手の残りストックを同じ画面で確認できます。</p><div class="actions"><button class="btn btn-primary btn-large" data-action="quick">簡易ストック計算 →</button>${st.publicEvents.length?'<button class="btn btn-secondary btn-large" data-action="scroll-events">大会に参加する</button>':''}</div></div><div class="hero-visual"><div class="hero-number">08</div><div class="hero-label">PLAYERS / MATCH</div></div></section>
+    ${st.user?`<div class="notice margin-top"><div class="between"><span>${st.profile?avatar(st.profile.color,'avatar-sm'):''} 個人ID：<code>${esc(fmtTinyId(st.user?.id))}</code>　<span class="small">同じブラウザで次回から自動認識します。</span></span><button class="btn btn-secondary btn-small" data-action="copy-id" data-id="${esc(st.user.id)}">IDコピー</button></div></div>`:''}
+    ${!configured?'<div class="warning margin-top">Supabaseが未設定です。簡易ストック計算は引き続き利用できます。</div>':''}
+    <div id="events-section"><div class="section-head"><div><div class="section-caption">YOUR MATCHES</div><h2>参加中の大会</h2></div></div>${mine?`<div class="grid-2">${mine}</div>`:'<div class="empty">まだ参加中の大会はありません。</div>'}
+    <div class="section-head"><div><div class="section-caption">JOIN</div><h2>登録済みの名前から参加</h2></div></div>${pub?`<div class="grid-2">${pub}</div>`:'<div class="empty">現在、参加受付中の大会はありません。主催者が登録を開始するとここに表示されます。</div>'}</div>
+    <div class="section-head"><div class="section-caption">QUICK TOOL</div></div><section class="panel panel-pad between"><div><h3>簡易ストック計算</h3><p class="sub small mb0">大会参加なしで65種類のブキを検索・管理できます。</p></div><button class="btn btn-secondary" data-action="quick">開く →</button></section></div>`;
 }
-function renderSolo(){app.innerHTML=`<div class="main standalone"><div class="back-row">${configured?homeButton():''}<span class="pill pill-cyan">外部連携なし</span></div><div class="eyebrow">QUICK STOCK COUNTER</div><h1>簡易ストック管理</h1><p class="subline">大会アカウントや通信がなくても使用可能。デス数とブキはこの端末に保存されます。</p>${soloUI()}</div>`;}
-function soloUI(){const s=state.solo;const w=state.weaponMap.get(s.weapon)||state.weapons[0];if(!w)return'';const max=w.stock;const deaths=Math.max(0,Math.min(max,Number(s.deaths)||0));const remain=max-deaths;
-return `<section class="panel panel-pad mt-4"><div class="form-group"><label class="form-label" for="soloWeapon">使用ブキ</label><select class="field" id="soloWeapon" data-change="solo-weapon">${state.weapons.map(x=>`<option value="${esc(x.name)}" ${x.name===w.name?'selected':''}>${esc(x.name)} （${x.stock}ストック）</option>`).join('')}</select></div><div class="panel-soft" style="padding:23px"><div class="solo-desc">残りストック / 初期 ${max}</div><div class="solo-count ${remain===0?'danger':''}">${remain}</div><div class="dots">${Array.from({length:max},(_,i)=>`<span class="stock-dot ${i<remain?'on':''}"></span>`).join('')}</div><div class="solo-desc">デス数：${deaths}</div>${remain===0?'<p class="danger bold" style="text-align:center;margin:13px 0 0">ストック切れ：リスポーンから出ない</p>':''}</div><div class="solo-actions mt-3"><button class="btn btn-death" data-action="solo-death" ${remain===0?'disabled':''}>☠ 1デス記録</button><button class="btn btn-outline" data-action="solo-undo" ${deaths===0?'disabled':''}>↶ 戻す</button></div><button class="btn btn-ghost btn-block mt-2" data-action="solo-reset">デス数をリセット</button><details class="details"><summary>ブキのストック別ティア表を見る（画像は別途配置）</summary><img src="./tierlist%20(4).png" loading="lazy" alt="元のティア表" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><p hidden>画像 <code>tierlist (4).png</code> を同じ階層に配置すると表示されます。</p></details></section>`;}
-function renderTournament(){
- if(!state.detail){app.innerHTML=`<div class="main"><section class="center-loading"><div class="spinner"></div><p>大会データ読み込み中</p></section></div>`;return;}
- const d=state.detail,t=d.tournament,admin=isOrganizer(),mySlot=playerSlotFor(t.id), claimed=d.slots.filter(s=>s.profile_id).length,total=d.slots.length, live=d.matches.filter(m=>m.status==='live').length;
- const nav=`<div class="nav-tabs"><button class="tab ${state.tab==='match'?'active':''}" data-action="tab" data-value="match">⚡ 対戦・ストック</button><button class="tab ${state.tab==='schedule'?'active':''}" data-action="tab" data-value="schedule">🏆 対戦表</button><button class="tab ${state.tab==='teams'?'active':''}" data-action="tab" data-value="teams">👥 チーム・選手</button>${admin?`<button class="tab ${state.tab==='admin'?'active':''}" data-action="tab" data-value="admin">⚙ 主催者管理</button>`:''}</div>`;
- app.innerHTML=`<div class="main"><div class="back-row">${homeButton()}<div class="pills">${badge(t.status)}<span class="pill">${esc(formatName(t.format))}</span>${admin?'<span class="pill pill-cyan">主催者</span>':''}</div></div><div class="eyebrow">TOURNAMENT / ${esc(t.id.slice(0,8).toUpperCase())}</div><h1>${esc(t.name)}</h1><div class="tourn-overview"><div class="metric"><small>チーム数</small><strong>${d.teams.length}</strong></div><div class="metric"><small>登録人数</small><strong>${claimed}<span class="tiny muted"> / ${total}</span></strong></div><div class="metric"><small>進行中</small><strong>${live}</strong></div></div>${mySlot?`<div class="banner">あなたは <strong>${esc(nameOfTeam(mySlot.team_id))}</strong> の ${mySlot.position}番目の選手です。ブキを変更しなければ前回の選択を引き継ぎます。</div>`:''}${nav}${state.tab==='match'?renderMatchTab(admin,mySlot):state.tab==='schedule'?renderSchedule():state.tab==='teams'?renderTeams():renderAdmin()}</div>`;
+function tierFigure(){return `<div class="tier-card"><div class="kicker">WEAPON STOCK TIER</div><h3>ストック別ブキ一覧</h3><p class="sub small">元のティア表をそのまま掲載しています。</p><a href="./tierlist%20(4).png" target="_blank" rel="noopener" title="画像を拡大する"><img class="tier-image" src="./tierlist%20(4).png" alt="ストック数別に全ブキが並んだティア表。ストック5・4・3・2の各段" loading="lazy"></a><p class="hint">画像をタップすると大きく表示できます。</p></div>`}
+function selectWeapons(id,current,changeAttr){return `<select id="${id}" class="field" data-change="${changeAttr}">${st.weapons.map(w=>`<option value="${esc(w.name)}" ${w.name===current?'selected':''}>${esc(w.name)} — ${w.stock}</option>`).join('')}</select>`}
+function dots(n,max){return `<div class="stock-dots">${Array.from({length:max||0},(_,i)=>`<span class="stock-dot ${i<n?'on':''}"></span>`).join('')}</div>`}
+function renderQuick(){const w=st.weaponMap.get(st.quick.weapon)||st.weapons[0];if(!w)return;const deaths=Math.min(w.stock,Math.max(0,Number(st.quick.deaths)||0));const remain=w.stock-deaths;
+  el.innerHTML=`<div class="shell main"><div class="page-head"><div><div class="kicker">QUICK TOOL / OFFLINE READY</div><h1>簡易ストック計算</h1><p class="sub mb0">ブキを選んでデスを記録。会員登録も通信も必要ありません。</p></div><button class="btn btn-secondary" data-action="home">← 戻る</button></div><div class="quick-layout"><section class="panel panel-pad"><div class="form-group"><label class="field-label" for="quick-search">使用ブキ（全65種類）</label><input id="quick-search" class="field" type="search" data-weapon-filter="quick" placeholder="ブキ名で検索" aria-label="ブキ検索" style="margin-bottom:8px">${selectWeapons('quick-weapon',w.name,'quick-weapon')}</div><div class="stock-figure"><div class="sub small strong">残りストック</div><span class="stock-big ${remain===0?'danger':''} mono">${remain}</span><span class="stock-out"> / ${w.stock}</span>${dots(remain,w.stock)}<div class="sub">デス ${deaths}回</div></div>${remain===0?'<p class="error-note">ストック切れ：リスポーンから出ない</p>':''}<div class="stack"><button class="btn btn-death btn-block" data-action="quick-death" ${remain===0?'disabled':''}>＋ 1デス記録</button><button class="btn btn-secondary btn-block" data-action="quick-undo" ${deaths===0?'disabled':''}>↶ 取り消し</button><button class="btn btn-text" data-action="quick-reset">デス数をリセット</button></div><p class="detail-note">このページのブキとデス数は端末内に保存されます。大会での同期には影響しません。</p></section><div class="quick-tiers">${tierFigure()}</div></div></div>`;
 }
-function renderMatchTab(admin,mySlot){const d=state.detail,match=chosenMatch();
- if(!d.matches.length)return `<div class="panel panel-pad"><h2>まだ対戦表がありません</h2><p class="muted">主催者がチームと参加枠を確認し、「対戦表を作成」を押すと試合を表示します。</p>${admin?'<button data-action="tab" data-value="admin" class="btn btn-accent">主催者管理へ →</button>':''}</div>`;
- const matchItems=d.matches.map(m=>`<button class="match-entry ${m.id===state.matchId?'active':''}" data-action="select-match" data-id="${m.id}"><span><span class="meta">R${m.round_index} • MATCH ${m.match_index}</span><span class="names">${esc(nameOfTeam(m.team_a_id))} <span class="muted">vs</span> ${esc(nameOfTeam(m.team_b_id))}</span></span>${badge(m.status)}</button>`).join('');
- return `<div class="grid-2"><div><div class="section-head"><div><span class="section-label">MATCH LIST</span><h2>試合を選択</h2></div></div><div class="match-list">${matchItems}</div></div><div><div class="section-head"><div><span class="section-label">CURRENT GAME</span><h2>${match?`${esc(nameOfTeam(match.team_a_id))} vs ${esc(nameOfTeam(match.team_b_id))}`:'試合を選択してください'}</h2></div></div>${match?`<div class="panel panel-pad"><div class="row-between">${badge(match.status)}<span class="small muted">第${match.round_index}ラウンド / 第${match.match_index}試合</span></div>${match.status==='pending'?'<p class="small muted mt-3">ブキは準備中に選択できます。主催者が開始するとストック記録が有効になります。</p>':match.status==='finished'?`<p class="accent bold mt-3">勝者：${esc(nameOfTeam(match.winner_id))}</p>`:'<p class="small muted mt-3">試合進行中。自分のデスだけ記録できます。</p>'}${admin?renderMatchAdmin(match):''}</div>`:''}</div></div>${match?renderLiveArea(match,mySlot):''}`;
+function renderClaim(){
+  const groups=[...new Map(st.roster.map(s=>[s.team_id,{id:s.team_id,name:s.team_name,seed:s.team_seed}])).values()];
+  el.innerHTML=`<div class="shell main roster-claim"><div class="page-head"><div><div class="kicker">FIRST JOIN / NO PASSWORD</div><h1>あなたの名前を選択</h1><p class="sub mb0">主催者が登録した一覧から自分の名前を選んでください。本人確認はありません。</p></div><button data-action="home" class="btn btn-secondary">← 戻る</button></div><div class="warning">他人の名前を選ばないでください。間違えて登録した場合、主催者が管理画面から割り当てを修正できます。</div><div class="panel panel-pad margin-top"><div class="between"><h3>自分のアイコン色</h3>${avatar(st.claimColor,'avatar-lg')}</div><div class="actions margin-top">${COLORS.map(c=>`<button type="button" data-action="pick-color" data-color="${c}" class="pick-dot ${st.claimColor===c?'active':''}" style="background:${c}" aria-label="カラー ${c}" title="カラー ${c}"></button>`).join('')}</div><p class="hint">アイコンは色付きの丸だけ。いつでも変更できます。</p></div><div class="section-head"><div class="section-caption">SELECT PLAYER</div><span class="badge">${st.roster.filter(s=>s.is_claimed).length}/${st.roster.length} 登録済み</span></div><div class="grid-2">${groups.map(team=>`<section class="team-roster"><div class="between"><h3>${esc(team.name)}</h3><span class="badge">${team.seed}組</span></div><div class="stack">${st.roster.filter(s=>s.team_id===team.id).map(s=>`<button class="identity-option" data-action="claim-slot" data-id="${s.slot_id}" ${s.is_claimed||!s.display_name?'disabled':''}>${avatar(s.color||COLORS[1])}<div class="flex-fill"><strong>${esc(s.display_name||'名前未設定')}</strong><div class="small sub">${s.position}番の選手 · ${s.is_claimed?'登録済み':'選択可能'}</div></div>${s.is_claimed?'登録済み':'選択 →'}</button>`).join('')}</div></section>`).join('')}</div></div>`;
 }
-function renderMatchAdmin(match){if(match.status==='finished')return'';if(!match.team_a_id||!match.team_b_id)return'<p class="small muted mt-3">前のラウンドの結果待ちです。</p>';
- return `<div class="match-action-card"><div class="row">${match.status==='pending'?`<button class="btn btn-accent" data-action="start-match" data-id="${match.id}">▶ 試合開始</button>`:`<button class="btn btn-outline" data-action="finish-dialog" data-id="${match.id}">🏆 勝敗を確定</button>`}</div></div>`;
+function renderColorEditor(){
+  el.innerHTML=`<div class="shell main"><div class="page-head"><div><div class="kicker">PROFILE COLOR</div><h1>アイコンの色</h1><p class="sub mb0">シンプルな色付きの丸から選べます。</p></div><button data-action="back-event" class="btn btn-secondary">← 戻る</button></div><section class="panel panel-pad" style="max-width:480px"><div class="between"><h3>${esc(mySlot()?.display_name||st.profile?.nickname||'プレイヤー')}</h3>${avatar(st.claimColor,'avatar-lg')}</div><div class="actions margin-top">${COLORS.map(c=>`<button type="button" data-action="pick-color" data-color="${c}" class="pick-dot ${st.claimColor===c?'active':''}" style="background:${c}" aria-label="カラー ${c}" title="カラー ${c}"></button>`).join('')}</div><button class="btn btn-primary btn-block margin-top" data-action="save-color">この色で保存</button></section></div>`;
 }
-function teamTotals(teamId,match){
- const slots=state.detail.slots.filter(s=>s.team_id===teamId);
- let total=0,max=0,count=0;
- for(const slot of slots){
-   const mp=state.matchPlayers.find(x=>x.slot_id===slot.id);
-   const v=scoreOf(match.status==='pending'?null:mp,slot);
-   const isMe=slot.profile_id===state.user?.id&&match.status==='live';
-   const score=isMe&&mp?currentDeaths(mp,slot,match):v;
-   if(score.max!==null){count++;total+=score.remain;max+=score.max;}
- }
- return {total,max,complete:count===4};
+function pickEventDefault(data){const myTeam=data.slots.find(s=>s.profile_id===st.user?.id)?.team_id;return data.matches.find(m=>m.status==='live' && [m.team_a_id,m.team_b_id].includes(myTeam))||data.matches.find(m=>m.status==='live')||data.matches.find(m=>m.status==='pending'&&[m.team_a_id,m.team_b_id].includes(myTeam)&&m.team_a_id&&m.team_b_id)||data.matches.find(m=>m.status==='pending'&&m.team_a_id&&m.team_b_id)||data.matches[0]||null}
+function matchScore(mp,slot,m){const weapon=mp?.weapon_name||slot?.preferred_weapon;const max=mp?.base_stock??st.weaponMap.get(weapon)?.stock??null;let deaths=mp?.deaths||0;const queued=(!ADMIN_MODE&&m?.status==='live'&&slot?.profile_id===st.user?.id)?pendingFor(m.id):[];deaths+=queued.reduce((n,e)=>n+e.delta,0);return {weapon,max,deaths,remain:max===null?null:Math.max(0,max-deaths),queued:queued.length}}
+function teamScores(teamId,m){const slots=st.event.slots.filter(s=>s.team_id===teamId).sort((a,b)=>a.position-b.position);let total=0,max=0,known=0;
+  const rows=slots.map(slot=>{const mp=m?.status==='pending'?null:st.matchPlayers.find(x=>x.slot_id===slot.id);const sc=matchScore(mp,slot,m);if(sc.max!==null){max+=sc.max;total+=sc.remain;known++}return {slot,sc}});
+  return {rows,total,max,complete:known===4,known};
 }
-function compactDuel(match){
- const a=teamTotals(match.team_a_id,match),b=teamTotals(match.team_b_id,match);
- const label=(tot,side)=>`<div class="duel-side ${side==='b'?'rival':''}"><strong>${esc(nameOfTeam(side==='a'?match.team_a_id:match.team_b_id))}</strong><span class="duel-num">${tot.complete?tot.total:'—'}<small> / ${tot.complete?tot.max:'未確定'}</small></span></div>`;
- return `<div class="duel-strip">${label(a,'a')}<div class="duel-vs">VS</div>${label(b,'b')}</div>`;
+function renderDuel(m){const a=teamScores(m.team_a_id,m),b=teamScores(m.team_b_id,m);return `<div class="dual-board"><div class="duel-side"><span class="duel-team">${esc(teamName(m.team_a_id))}</span><div class="duel-stock mono">${a.complete?a.total:'—'} <small>/ ${a.complete?a.max:'未確定'}</small></div></div><div class="duel-vs">VS</div><div class="duel-side rival"><span class="duel-team">${esc(teamName(m.team_b_id))}</span><div class="duel-stock mono">${b.complete?b.total:'—'} <small>/ ${b.complete?b.max:'未確定'}</small></div></div></div>`}
+function teamBoard(teamId,m,rival){const s=teamScores(teamId,m);return `<div class="team-board ${rival?'rival':''}"><div class="team-board-head"><div class="between"><span class="team-board-name">${esc(teamName(teamId))}</span><span class="badge">${s.known}/4 ブキ</span></div><div class="between margin-top"><span class="team-total mono">${s.complete?s.total:'—'} <small class="sub">/ ${s.complete?s.max:'未確定'}</small></span><span class="small sub">合計ストック</span></div><div class="bar"><span style="width:${s.complete&&s.max?Math.round(s.total/s.max*100):0}%"></span></div></div>${s.rows.map(({slot,sc})=>`<div class="roster-row">${avatar(st.event.profiles.find(p=>p.id===slot.profile_id)?.color)}<div class="roster-info"><strong>${esc(slot.display_name||'名前未設定')}${slot.profile_id===st.user?.id&&!ADMIN_MODE?'（自分）':''}</strong><small>${esc(sc.weapon||'ブキ未選択')}</small></div><div class="roster-value mono ${sc.remain===0?'red':''}">${sc.remain===null?'—':sc.remain}<small>${sc.max===null?'':' / '+sc.max}</small></div></div>`).join('')}</div>`}
+function personalControl(m){const slot=mySlot(),me=slot&&matchOfMe(m);if(!me)return `<section class="personal-card"><div class="kicker">SPECTATOR MODE</div><h3>この試合の状況を確認中</h3><p class="sub small">この試合の選手ではないため、ストック情報は閲覧のみ可能です。</p></section>`;
+  const mp=st.matchPlayers.find(x=>x.slot_id===slot.id);const sc=matchScore(m.status==='pending'?null:mp,slot,m);const pending=pendingFor(m.id);const allowSelect=m.status==='pending'||(m.status==='live'&&(mp?.deaths||0)===0&&pending.length===0);const selectVal=m.status==='pending'?slot.preferred_weapon:(mp?.weapon_name||slot.preferred_weapon);const recent=st.recent.filter(w=>st.weaponMap.has(w)).slice(0,3);
+  return `<section class="personal-card"><div class="kicker">MY STOCK / ${esc(slot.display_name)}</div><div class="form-group"><label class="field-label" for="match-search">使用ブキ ${allowSelect?'':'（変更不可）'}</label>${allowSelect?'<input id="match-search" class="field" type="search" data-weapon-filter="match" placeholder="ブキ名で検索" aria-label="ブキ検索" style="margin-bottom:8px">':''}<select id="match-weapon" data-change="match-weapon" class="field" ${allowSelect?'':'disabled'}><option value="">ブキを選択</option>${st.weapons.map(w=>`<option value="${esc(w.name)}" ${selectVal===w.name?'selected':''}>${esc(w.name)} — ${w.stock}</option>`).join('')}</select>${allowSelect?`<div class="actions margin-top">${recent.map(w=>`<button class="btn btn-secondary btn-small" data-action="recent-weapon" data-weapon="${esc(w)}">${esc(w)}</button>`).join('')}</div>`:''}</div><div class="stock-figure"><div class="sub small strong">残りストック</div><span class="stock-big ${sc.remain===0?'danger':''} mono">${sc.remain??'—'}</span><span class="stock-out"> / ${sc.max??'—'}</span>${dots(sc.remain||0,sc.max||0)}<div class="sub small">デス ${sc.deaths}回</div></div>${sc.remain===0?'<div class="error-note">ストック切れ。リスポーンから出ない。</div>':''}<div class="stack margin-top"><button class="btn btn-death" data-action="death" ${m.status!=='live'||sc.max===null||sc.remain<=0?'disabled':''}>＋ 1デス記録</button><button class="btn btn-secondary btn-block" data-action="undo" ${m.status!=='live'||sc.deaths<=0?'disabled':''}>↶ 直前の記録を取り消し</button></div><div class="between margin-top"><span class="sub small">${m.status==='pending'?'試合開始待ち':'操作は自動保存'}</span><button class="btn btn-text" data-action="wake">画面消灯防止 ${st.wakeEnabled?'ON':'OFF'}</button></div>${pending.length?`<div class="warning margin-top"><strong>未同期 ${pending.length}件</strong>：この端末内に保存中。<button class="btn btn-secondary btn-small" data-action="retry-sync">再送</button> <button class="btn btn-text" data-action="clear-pending">記録を破棄</button></div>`:m.status==='live'?'<p class="hint">同期済みのデス数は全員に共有されます。</p>':''}</section>`;
 }
-function renderLiveArea(match,mySlot){
- const d=state.detail, containsMySlot=Boolean(mySlot && [match.team_a_id,match.team_b_id].includes(mySlot.team_id));const mine=d.slots.find(s=>s.id===mySlot?.id);
- const mp=state.matchPlayers.find(x=>x.slot_id===mine?.id), scoring=containsMySlot&&match.status==='live';
- const label=match.status==='live'?'LIVE STOCK BOARD':match.status==='pending'?'PREVIEW / WEAPON PICK':'FINAL SCORE';
- return `<div class="section-head"><div><span class="section-label">${label}</span><h2>チームストック</h2></div>${match.status==='live'?'<span class="pill pill-lime">● REALTIME</span>':''}</div>${compactDuel(match)}<div class="controls-grid">${containsMySlot&&match.status!=='finished'?renderPersonalControl(match,mine,mp,scoring):`<section class="my-control"><div class="own-label">${isOrganizer()?'🏆 主催者ビュー':'👀 観戦モード'}</div><h2 style="margin:15px 0 5px">${isOrganizer()?'全員の残りストックを確認':'自分の対戦ではありません'}</h2><p class="small muted">試合の状況を表示しています。各選手のデス記録は、本人のみ変更できます。</p></section>`}<div class="scoreboard-wrap"><div class="scoreboard">${teamScoreboard(match.team_a_id,match,false)}${teamScoreboard(match.team_b_id,match,true)}</div><p class="small muted mt-2">未登録のブキは「—」と表示し、チーム合計には含めません。全員のブキが登録されるまで正確なチーム合計は出しません。</p></div></div>`;
+function matchSelector(m){return `<button class="card-btn ${m.id===st.matchId?'active':''}" data-action="pick-match" data-id="${m.id}"><div class="between"><span class="small sub">R${m.round_index} / #${m.match_index}</span>${badge(m.status)}</div><div class="card-title">${esc(teamName(m.team_a_id))} <span class="sub">vs</span> ${esc(teamName(m.team_b_id))}</div></button>`}
+function renderMatches(admin){const d=event();if(!d.matches.length)return `<div class="empty">対戦表はまだありません。${admin?'主催者が対戦表を生成してください。':'主催者の設定をお待ちください。'}</div>`;
+  const m=currMatch();return `<div class="grid-aside"><section><div class="section-head"><h2>対戦一覧</h2><span class="badge">${d.matches.length}試合</span></div><div class="matches-list">${d.matches.map(matchSelector).join('')}</div></section><section><div class="section-head"><h2>${m?`${esc(teamName(m.team_a_id))} vs ${esc(teamName(m.team_b_id))}`:'試合を選択'}</h2>${m?badge(m.status):''}</div>${m?`${renderDuel(m)}${admin?adminMatchControls(m):''}<div class="control-grid">${admin?`<section class="personal-card"><div class="kicker">ORGANIZER VIEW</div><h3>全選手のストックを確認</h3><p class="sub small">選手のデス記録は本人が操作します。ここからは勝敗と試合進行のみ管理できます。</p></section>`:personalControl(m)}<div class="scoreboard">${teamBoard(m.team_a_id,m,false)}${teamBoard(m.team_b_id,m,true)}</div></div><p class="detail-note">ブキ未選択の選手がいる間、チームの合計ストックは「未確定」と表示します。通信切断中の本人の操作は他端末には未反映です。</p>`:''}</section></div>`;
 }
-function renderPersonalControl(match,slot,mp,scoring){const base=scoring?currentDeaths(mp,slot,match):scoreOf(null,slot),pending=pendingFor(match.id);const remain=base.remain,max=base.max;const missing=max===null;const currentWeapon=scoring?(mp?.weapon_name||slot.preferred_weapon):slot.preferred_weapon;
- const allowSelect=match.status==='pending'||(scoring&&(mp?.deaths||0)===0 && pending.length===0);
- return `<section class="my-control"><div class="own-label">◉ MY STOCK / 自分のストック</div><div class="select-weapon"><label class="form-label" for="weapon-choice">使用ブキ ${!allowSelect?'🔒':''}</label><select class="field" id="weapon-choice" data-change="set-weapon" ${!allowSelect?'disabled':''}><option value="">ブキを選択してください</option>${state.weapons.map(w=>`<option value="${esc(w.name)}" ${currentWeapon===w.name?'selected':''}>${esc(w.name)}（${w.stock}）</option>`).join('')}</select>${allowSelect?`<div class="row mt-2">${state.recentWeapons.filter(n=>state.weaponMap.has(n)).slice(0,3).map(n=>`<button class="btn btn-outline btn-small" data-action="quick-weapon" data-value="${esc(n)}">${esc(n)}</button>`).join('')}</div><p class="tiny muted mt-2">最近使ったブキはワンタップで選択</p>`:''}</div><div class="my-stocks"><div class="small muted">残りストック</div><span class="count ${remain===0?'dead':''}">${remain??'—'}</span><span class="outof"> / ${max??'—'}</span><div class="dots">${Array.from({length:max||0},(_,i)=>`<i class="stock-dot ${i<remain?'on':''}"></i>`).join('')}</div><div class="small muted">デス記録 ${base.deaths??0} 回</div>${remain===0?'<div class="pill pill-red mt-2">ストック切れ • リスポーンから出ない</div>':''}</div><button class="btn btn-death btn-block" data-action="death" ${!scoring||missing||remain<=0?'disabled':''}>☠ 1デス記録</button><button class="btn btn-outline btn-block mt-2" data-action="undo" ${!scoring||base.deaths<=0?'disabled':''}>↶ 1デス取り消し</button><div class="row-between mt-3"><span class="small muted">操作は自動保存</span><button class="btn btn-ghost btn-small" data-action="wake">${state.wakeEnabled?'☀ 画面消灯防止 ON':'☀ 画面消灯防止 OFF'}</button></div>${pending.length?`<div class="network-alert"><strong>未同期 ${pending.length}件</strong>（この端末に保存）<br>再接続時に自動送信します。<button class="btn btn-ghost btn-small" data-action="retry-sync">再送</button><button class="btn btn-ghost btn-small danger" data-action="clear-pending">未同期を破棄</button></div>`:scoring?'<div class="network-ok">✓ サーバー保存後に全員の画面へ反映されます</div>':''}</section>`;
+function adminMatchControls(m){if(m.status==='finished')return `<div class="success-note margin-top">勝者：${esc(teamName(m.winner_id))}</div>`;
+  if(!m.team_a_id||!m.team_b_id)return '<div class="warning margin-top">両チームが確定していません。</div>';
+  return `<div class="panel panel-pad margin-top"><div class="between"><div><strong>${m.status==='pending'?'試合開始待ち':'試合進行中'}</strong><div class="sub small">試合開始時にブキと初期ストックを記録します。</div></div><button class="btn btn-primary" data-action="${m.status==='pending'?'admin-start-match':'admin-finish-match'}" data-id="${m.id}">${m.status==='pending'?'試合を開始':'勝敗を確定'}</button></div></div>`;
 }
-function teamScoreboard(teamId,match,enemy){const d=state.detail,slots=d.slots.filter(s=>s.team_id===teamId).sort((a,b)=>a.position-b.position),me=state.user?.id;
- let known=0,total=0,possible=0;const rows=slots.map(s=>{const mp=state.matchPlayers.find(x=>x.slot_id===s.id);const p=d.profiles.find(x=>x.id===s.profile_id);const v=scoreOf(match.status==='live'||match.status==='finished'?mp:null,s);if(v.max!==null){known++;total+=v.remain;possible+=v.max;}
- const isMe=me&&s.profile_id===me,up=match.status==='live'&&isMe?currentDeaths(mp,s,match):null;const remain=up?up.remain:v.remain;const nm=p?.nickname||`選手枠 ${s.position}`;return `<div class="roster-row"><div class="roster-avatar" style="background:${esc(p?.color||'#516078')}">${esc(p?.avatar||'•')}</div><div class="roster-info"><strong>${esc(nm)}${isMe?' <span class="cyan tiny">(あなた)</span>':''}</strong><small>${esc(v.weapon||'ブキ未選択')}</small></div><div class="roster-stock ${remain===0?'danger':''}">${remain===null?'—':remain}<small>${v.max===null?'':' / '+v.max}</small></div></div>`;}).join('');
- const all=known===4;return `<div class="team-block ${enemy?'enemy':''}"><div class="team-header"><div class="row-between"><h3>${esc(nameOfTeam(teamId))}</h3><span class="pill">${known}/4 登録</span></div><div class="row-between mt-2"><div><span class="team-total">${all?total:'—'}</span><span class="small muted"> / ${all?possible:'合計未確定'}</span></div><span class="small muted">合計ストック</span></div><div class="team-bar"><span style="width:${all&&possible?100*total/possible:0}%"></span></div></div>${rows}</div>`;
+function renderSchedule(){const d=event();if(!d.matches.length)return '<div class="empty">対戦表は未作成です。</div>';
+  const rounds=[...new Set(d.matches.map(m=>m.round_index))];
+  if(d.tournament.format==='round_robin'){
+    const standings=d.teams.map(t=>{const played=d.matches.filter(m=>m.status==='finished'&&[m.team_a_id,m.team_b_id].includes(t.id));return {team:t,played:played.length,wins:played.filter(m=>m.winner_id===t.id).length}}).sort((a,b)=>b.wins-a.wins);
+    return `<div class="panel panel-pad"><h2>暫定成績</h2><div class="scroll-x"><table class="round-table"><thead><tr><th>チーム</th><th>試合</th><th>勝利</th><th>敗北</th></tr></thead><tbody>${standings.map(x=>`<tr><td>${esc(x.team.name)}</td><td>${x.played}</td><td><b>${x.wins}</b></td><td>${x.played-x.wins}</td></tr>`).join('')}</tbody></table></div></div><div class="rounds margin-top">${rounds.map(r=>`<section class="panel panel-pad"><h3>ROUND ${r}</h3><div class="stack">${d.matches.filter(m=>m.round_index===r).map(matchSelector).join('')}</div></section>`).join('')}</div>`;
+  }
+  return `<div class="section-head"><h2>トーナメント表</h2><span class="badge">横スクロールで全ラウンドを確認</span></div><div class="bracket">${rounds.map(r=>`<div class="bracket-col"><div class="kicker">ROUND ${r}</div>${d.matches.filter(m=>m.round_index===r).map(m=>`<button class="card-btn ${m.id===st.matchId?'active':''}" data-action="pick-match" data-id="${m.id}"><div class="between"><span class="small sub">MATCH ${m.match_index}</span>${badge(m.status)}</div><div class="card-title">${esc(teamName(m.team_a_id))}</div><div class="card-title">${esc(teamName(m.team_b_id))}</div></button>`).join('')}</div>`).join('')}</div>`;
 }
-function renderSchedule(){const d=state.detail;
- if(!d.matches.length)return `<div class="panel panel-pad"><h2>対戦表は未生成です</h2><p class="muted">チーム設定ができたら、主催者画面で対戦表を生成してください。</p></div>`;
- if(d.tournament.format==='round_robin'){
- const rounds=[...new Set(d.matches.map(m=>m.round_index))];
- const standings=d.teams.map(team=>{const played=d.matches.filter(m=>m.status==='finished'&&(m.team_a_id===team.id||m.team_b_id===team.id));return {team,wins:played.filter(m=>m.winner_id===team.id).length,losses:played.filter(m=>m.winner_id!==team.id).length,played:played.length};}).sort((a,b)=>b.wins-a.wins||a.losses-b.losses);
- const table=`<section class="panel panel-pad mb-2"><h3>暫定成績（勝利数順）</h3><div style="overflow-x:auto"><table class="roundtable"><thead><tr><th>チーム</th><th>試合</th><th>勝利</th><th>敗北</th></tr></thead><tbody>${standings.map(s=>`<tr><td>${esc(s.team.name)}</td><td>${s.played}</td><td class="accent bold">${s.wins}</td><td>${s.losses}</td></tr>`).join('')}</tbody></table></div><p class="small muted mt-2">同率時の順位決定ルールは含みません。必要なら主催者が別途決定してください。</p></section>`;
- return `<div class="section-head"><h2>総当たり対戦表</h2><span class="pill">全${d.matches.length}試合</span></div>${table}${rounds.map(r=>`<section class="panel panel-pad mb-2"><h3>ROUND ${r}</h3><div class="match-list">${d.matches.filter(m=>m.round_index===r).map(m=>`<button class="match-entry" data-action="select-match" data-id="${m.id}"><span class="names">${esc(nameOfTeam(m.team_a_id))} vs ${esc(nameOfTeam(m.team_b_id))}${m.winner_id?` <span class="winner">優勝:${esc(nameOfTeam(m.winner_id))}</span>`:''}</span>${badge(m.status)}</button>`).join('')}</div></section>`).join('')}`;
- }
- const rounds=[...new Set(d.matches.map(m=>m.round_index))];return `<div class="section-head"><h2>トーナメント表</h2><span class="pill">全${d.matches.length}枠（不戦勝含む）</span></div><div class="bracket">${rounds.map(r=>`<div class="bracket-column"><div class="bracket-title">ROUND ${r}</div>${d.matches.filter(m=>m.round_index===r).map(m=>`<button class="bracket-match ${state.matchId===m.id?'active':''}" data-action="select-match" data-id="${m.id}" style="display:block;width:100%;text-align:left;color:inherit"><div class="line ${m.winner_id===m.team_a_id?'won':''}">${esc(nameOfTeam(m.team_a_id))}${m.winner_id===m.team_a_id?' ✓':''}</div><div class="line ${m.winner_id===m.team_b_id?'won':''}">${esc(nameOfTeam(m.team_b_id))}${m.winner_id===m.team_b_id?' ✓':''}</div>${badge(m.status)}</button>`).join('')}</div>`).join('')}</div>`;
+function teamLists(){return `<div class="grid-2">${st.event.teams.map(team=>`<section class="team-roster"><div class="between"><h3>${esc(team.name)}</h3><span class="badge">TEAM ${team.seed}</span></div>${st.event.slots.filter(s=>s.team_id===team.id).sort((a,b)=>a.position-b.position).map(s=>{const p=st.event.profiles.find(x=>x.id===s.profile_id);return `<div class="roster-row">${avatar(p?.color)}<div class="roster-info"><strong>${esc(s.display_name||'名前未設定')}</strong><small>${esc(s.preferred_weapon||'ブキ未選択')}${s.profile_id?'':' · 未参加'}</small></div><span class="badge">${s.profile_id?'参加済み':s.position+'番'}</span></div>`}).join('')}</section>`).join('')}</div>`}
+function eventHeader(admin=false){const e=st.event;if(!e)return '';return `<div class="page-head"><div><div class="kicker">${admin?'ORGANIZER / EVENT':'PLAYER / EVENT'}</div><h1>${esc(e.tournament.name)}</h1><div class="actions">${badge(e.tournament.status)}<span class="badge">${fmt(e.tournament.format)}</span><span class="badge">${e.teams.length}チーム</span>${admin?`<span class="badge ${e.tournament.is_open?'badge-live':''}">${e.tournament.is_open?'参加受付中':'受付停止'}</span>`:''}</div></div><button class="btn btn-secondary" data-action="home">← ホーム</button></div>`}
+function renderEvent(){if(!st.event){el.innerHTML='<div class="shell loading">大会データを読み込み中…</div>';return}
+  const slot=mySlot();const tabs=[['match','対戦・ストック'],['schedule','対戦表'],['teams','チーム一覧']];
+  el.innerHTML=`<div class="shell main">${eventHeader()}${slot?`<div class="notice">あなたは <strong>${esc(teamName(slot.team_id))} / ${esc(slot.display_name)}</strong> として参加しています。ブキは前の試合から引き継がれます。</div>`:''}<nav class="tabs">${tabs.map(([v,t])=>`<button class="tab ${st.tab===v?'active':''}" data-action="player-tab" data-tab="${v}">${t}</button>`).join('')}</nav>${st.tab==='schedule'?renderSchedule():st.tab==='teams'?teamLists():renderMatches(false)}<section class="panel panel-pad margin-top between"><div class="row"><span class="sub small">アイコン色：</span>${avatar(st.profile?.color)}<span class="small">${esc(slot?.display_name||'プレイヤー')}</span></div><button class="btn btn-secondary btn-small" data-action="change-color">色を変更</button></section></div>`;
 }
-function renderTeams(){const d=state.detail;return `<div class="section-head"><h2>チームと選手</h2><span class="pill">登録 ${d.slots.filter(s=>s.profile_id).length}/${d.slots.length}</span></div><div class="grid-2">${d.teams.map(t=>`<section class="panel panel-pad"><div class="row-between"><div><div class="section-label">SEED ${t.seed}</div><h3>${esc(t.name)}</h3></div><span class="pill">4名</span></div><div class="mini-roster">${d.slots.filter(s=>s.team_id===t.id).sort((a,b)=>a.position-b.position).map(s=>{const p=d.profiles.find(x=>x.id===s.profile_id);return `<div class="mini-slot"><span>${esc(p?.avatar||'○')}</span><b>${esc(p?.nickname||'未登録')}</b><span class="muted">${esc(s.preferred_weapon||'ブキ未登録')}</span></div>`;}).join('')}</div></section>`).join('')}</div>`;}
-function renderAdmin(){if(!isOrganizer())return'';const d=state.detail,t=d.tournament,free=d.slots.filter(s=>!s.profile_id).length;
- const invitePanel=state.invites?`<div class="highlight-box"><strong>招待リンクを発行しました（未登録 ${state.invites.length}枠）</strong><p class="small muted">この一覧は画面を離れると消えます。再発行すると前の未使用リンクは使えなくなります。各リンクは1人1回の利用です。</p>${state.invites.map((i,n)=>`<div class="invite-row"><div><strong>${esc(i.team_name)} / ${i.slot_position}番</strong><div class="code">${esc(inviteLink(i.invite_token))}</div></div><button class="btn btn-outline btn-small" data-action="copy-invite" data-index="${n}">コピー</button></div>`).join('')}<button class="btn btn-outline btn-small mt-3" data-action="copy-all-invites">全リンクをコピー</button></div>`:'';
- return `<div class="section-head"><h2>主催者コントロール</h2><span class="pill pill-cyan">主催者のみ編集可能</span></div><div class="grid-2"><section class="panel panel-pad"><div class="eyebrow">INVITATION</div><h3>選手の招待・登録</h3><p class="small muted">チームと4人分の選手枠は作成済み。招待URLは各枠に固有です。</p><p class="muted">未登録 ${free} / ${d.slots.length} 枠</p><button class="btn btn-accent btn-block" data-action="issue-invites" ${free?'':'disabled'}>🔗 未登録枠の招待リンクを発行</button><p class="small muted mt-2">※ このボタンを再度押すと未使用リンクがすべて更新されます。</p></section><section class="panel panel-pad"><div class="eyebrow">MATCH SCHEDULE</div><h3>対戦表の作成</h3><p class="small muted">${formatName(t.format)} / ${d.teams.length}チーム。${d.matches.length?'対戦表はすでに生成されています。':'試合と組み合わせをまとめて生成します。'}</p><button class="btn btn-accent btn-block" data-action="generate" ${d.matches.length?'disabled':''}>🏆 対戦表を自動生成</button><p class="small muted mt-2">トーナメントはシード順とBYEに対応。総当たりはラウンドごとの組合せを生成します。</p></section></div>${invitePanel}<section class="panel panel-pad mt-4"><h3>運用上の注意</h3><p class="small muted">試合開始ボタンでブキと初期ストックを確定します。ただし未選択の選手は初デス前までブキを選択できます。勝敗はサイトが自動判定せず、主催者が実際の試合結果を確認して確定してください。</p><p class="small muted">デス数は本人だけが変更できます。主催者によるデス数直接修正・敗者復活・途中でのチーム再編成は本MVPには含みません。</p></section>`;
+function renderAdminLogin(){el.innerHTML=`<div class="shell main"><section class="admin-login panel panel-pad"><div class="kicker">ORGANIZER ONLY</div><h1 style="font-size:31px">運営者ログイン</h1><p class="sub">大会作成・選手名登録・対戦表・割り当て修正は、許可されたメールアドレスでログインした運営者だけが変更できます。</p><form id="admin-login-form"><div class="form-group"><label class="field-label" for="admin-email">運営者メールアドレス</label><input id="admin-email" name="email" type="email" class="field" autocomplete="email" placeholder="you@example.com" required></div><button class="btn btn-primary btn-block btn-large" type="submit">ログイン用メールを送る</button></form><p class="hint">受信メールのリンクから戻るとログインできます。参加者はこの操作不要です。</p><hr class="divider"><button class="btn btn-secondary btn-block" data-action="quick">簡易計算に戻る</button></section></div>`}
+function renderAdminHome(){const rows=st.adminEvents.map(t=>`<button class="card-btn" data-action="admin-open-event" data-id="${t.id}"><div class="between"><span class="kicker">EVENT / ${esc(fmt(t.format))}</span>${badge(t.status)}</div><div class="card-title">${esc(t.name)}</div><div class="card-sub">${t.is_open?'受付中':'受付停止'} · ${t.organizer_id===st.adminUser?.id?'管理対象':'旧イベント・管理者への移管が必要'}</div></button>`).join('');
+  el.innerHTML=`<div class="shell main"><div class="page-head"><div><div class="kicker">ADMIN CONSOLE</div><h1>大会管理</h1><p class="sub mb0">プレイヤー名とチームを先に登録。参加者は一覧から自分の名前を選択します。</p></div><span class="badge badge-dark">認証済み運営者</span></div><div class="grid-aside"><section class="panel panel-pad"><div class="kicker">CREATE EVENT</div><h2>新しい大会</h2><form id="admin-create-form"><div class="form-group"><label class="field-label" for="event-name">大会名</label><input id="event-name" name="name" class="field" maxlength="60" required placeholder="例：ストック杯"></div><div class="form-group"><label class="field-label" for="event-format">形式</label><select id="event-format" name="format" class="field"><option value="elimination">トーナメント</option><option value="round_robin">総当たり</option></select></div><div class="form-group"><label class="field-label" for="event-teams">チーム名（2～16、1行1チーム）</label><textarea id="event-teams" name="teams" class="field textarea" required>チーム A\nチーム B\nチーム C\nチーム D</textarea></div><button type="submit" class="btn btn-primary btn-block">大会の枠を作る</button></form><p class="hint">作成時は非公開です。あとで4名ずつの名前を登録し、受付を開始します。</p></section><section><div class="section-head"><h2>作成済みの大会</h2><span class="badge">${st.adminEvents.length}件</span></div>${rows?`<div class="stack">${rows}</div>`:'<div class="empty">大会がありません。</div>'}</section></div></div>`;
 }
-function inviteLink(token){return `${location.origin}${location.pathname}?invite=${encodeURIComponent(token)}`;}
-async function runBusy(fn){if(state.busy)return;state.busy=true;try{await fn();}catch(err){console.error(err);toast(err?.message||String(err),true);}finally{state.busy=false;}}
-function check(data,error){if(error)throw new Error(error.message||'通信に失敗しました');return data;}
-async function callRpc(name,params={}){const {data,error}=await state.client.rpc(name,params);return check(data,error);}
-async function boot(){
- try{
-  const response=await fetch('./weapons.json',{cache:'no-cache'});
-  if(!response.ok)throw new Error('weapons.jsonが見つかりません');
-  const catalog=await response.json();
-  if(!Array.isArray(catalog)||catalog.length!==65||new Set(catalog.map(x=>x.name)).size!==65||catalog.some(x=>!Number.isInteger(x.stock)))throw new Error('ブキデータが変更・欠損しています（65件が必要）');
-  state.weapons=catalog;state.weaponMap=new Map(catalog.map(x=>[x.name,x]));
-  if(!state.weaponMap.has(state.solo.weapon))state.solo.weapon=catalog[0].name;
-  if(!configured){render();return;}
+function adminRoster(){const e=st.event;return `<div class="section-head"><div><div class="kicker">ROSTER / ORGANIZER ONLY</div><h2>選手名を事前登録</h2></div><button class="btn ${e.tournament.is_open?'btn-danger':'btn-primary'}" data-action="admin-toggle-open">${e.tournament.is_open?'参加受付を停止':'参加受付を開始'}</button></div><div class="notice">参加者には名前を選ぶだけにしてもらいます。名前が誤って取得された場合、下の「移動・入替」または「登録解除」で直せます。</div><div class="grid-2 margin-top">${e.teams.map(team=>{const slots=e.slots.filter(s=>s.team_id===team.id).sort((a,b)=>a.position-b.position);return `<section class="team-roster"><form data-form="roster" data-team="${team.id}"><div class="between"><h3>TEAM ${team.seed}</h3><button type="submit" class="btn btn-primary btn-small">このチームを保存</button></div><div class="form-group"><label class="field-label">チーム名</label><input class="field" name="teamName" maxlength="36" value="${esc(team.name)}" required></div><div class="roster-edit-grid">${slots.map(s=>`<div><label class="field-label">${s.position}番 ${s.profile_id?'●':''}</label><input class="field" name="player${s.position}" maxlength="24" value="${esc(s.display_name||'')}" placeholder="選手名" required></div>`).join('')}</div></form></section>`}).join('')}</div><div class="section-head"><h2>プレイヤーの割り当て修正</h2><span class="badge">${e.slots.filter(s=>s.profile_id).length}/${e.slots.length} 登録</span></div><section class="panel panel-pad"><p class="sub small">登録された端末の個人IDを確認できます。間違って選んだ選手を移動するときは、移動先の名前を選んでください。移動先にも登録者がいる場合は入れ替えます。</p><div class="stack">${e.slots.filter(s=>s.profile_id).map(s=>{const options=e.slots.filter(x=>x.id!==s.id).map(x=>`<option value="${x.id}">${esc(teamName(x.team_id))} / ${esc(x.display_name||'未設定')}${x.profile_id?'（登録済み）':''}</option>`).join('');return `<div class="admin-slot"><span>${avatar(e.profiles.find(p=>p.id===s.profile_id)?.color)}</span><div style="flex:1;min-width:145px"><div class="admin-slot-name">${esc(s.display_name||'名前未設定')} <span class="sub small">(${esc(teamName(s.team_id))})</span></div><div class="admin-slot-id">ID: ${esc(s.profile_id)}</div></div><div class="actions"><button class="btn btn-secondary btn-small" data-action="copy-id" data-id="${s.profile_id}">IDコピー</button><select class="field" id="move-${s.id}" aria-label="移動先">${options}</select><button class="btn btn-secondary btn-small" data-action="admin-move" data-id="${s.id}">移動・入替</button><button class="btn btn-danger btn-small" data-action="admin-release" data-id="${s.id}">解除</button></div></div>`}).join('')||'<div class="sub">まだ誰も参加していません。</div>'}</div><div class="warning margin-top">試合のストック記録が作成された後は、履歴を壊さないよう選手の移動・解除を禁止しています。表示名の修正は可能です。</div><div class="divider-soft"></div><h3>端末紛失・再接続用のID付け替え</h3><p class="sub small">端末が変わり匿名IDが失われた場合に使います。本人の新しい端末に表示される「個人ID」を入力してください。元のストック記録はそのまま保持します。</p><form id="admin-rebind-form"><div class="form-group"><label class="field-label" for="rebind-slot">対象の選手</label><select id="rebind-slot" name="slot" class="field" required>${e.slots.filter(x=>x.profile_id).map(x=>`<option value="${x.id}">${esc(teamName(x.team_id))} / ${esc(x.display_name||'')}</option>`).join('')}</select></div><div class="form-group"><label class="field-label" for="rebind-user">新端末の個人ID（UUID）</label><input id="rebind-user" class="field" name="user" required placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" pattern="[a-fA-F0-9-]{36}"></div><button type="submit" class="btn btn-secondary">この選手を新しいIDに付け替える</button></form></section>`}
+function adminSchedule(){return `<div class="section-head"><div><div class="kicker">MATCH CONTROL</div><h2>対戦の進行</h2></div>${st.event.matches.length?'':`<button class="btn btn-primary" data-action="admin-generate">対戦表を自動生成</button>`}</div><div class="notice">勝敗は実際の対戦結果を確認して運営者が確定します。進行中は選手本人だけがデス数を更新できます。</div><div class="margin-top">${renderMatches(true)}</div>`}
+function renderAdminEvent(){if(!st.event){el.innerHTML='<div class="shell loading">大会データを読み込み中…</div>';return}
+  const e=st.event;const owned=e.tournament.organizer_id===st.adminUser?.id;
+  el.innerHTML=`<div class="shell main">${eventHeader(true)}${!owned?'<div class="warning">この大会は旧バージョンの主催者IDに紐づいています。続行するには現在の運営者へ移管してください。<button class="btn btn-primary btn-small" data-action="admin-adopt">管理対象に移す</button></div>':''}<div class="stats"><div class="metric"><div class="metric-label">チーム</div><div class="metric-value">${e.teams.length}</div></div><div class="metric"><div class="metric-label">参加者</div><div class="metric-value">${e.slots.filter(s=>s.profile_id).length}<span class="sub" style="font-size:14px"> / ${e.slots.length}</span></div></div><div class="metric"><div class="metric-label">進行中</div><div class="metric-value">${e.matches.filter(m=>m.status==='live').length}</div></div></div><nav class="tabs">${[['roster','チーム・選手'],['matches','対戦・ストック'],['schedule','対戦表']].map(([k,t])=>`<button class="tab ${st.adminTab===k?'active':''}" data-action="admin-tab" data-tab="${k}">${t}</button>`).join('')}</nav>${st.adminTab==='roster'?adminRoster():st.adminTab==='matches'?adminSchedule():renderSchedule()}</div>`;
+}
+async function loadPlayerHome(){unsubscribe();st.view='home';st.event=null;st.eventId=null;st.matchId=null;
+  const c=st.playerClient;
+  if(!c){st.tournaments=[];st.publicEvents=[];show();return}
+  const [mine,pub]=await Promise.all([
+    c.from('tournaments').select('id,name,format,status,created_at').order('created_at',{ascending:false}),
+    c.rpc('list_open_tournaments')
+  ]);
+  st.tournaments=check(mine)||[];st.publicEvents=check(pub)||[];show();
+}
+async function loadClaimRoster(eventId){st.claimEventId=eventId;st.roster=await rpc('list_open_roster',{p_tournament:eventId},st.playerClient);st.view='claim';show()}
+async function loadAdminHome(){unsubscribe();st.view='admin-home';st.event=null;st.eventId=null;st.matchId=null;st.adminEvents=await rpc('admin_list_all_tournaments',{},st.adminClient);show()}
+async function loadEvent(id,first=false){const c=client();if(!c)return;if(st.loading)return;
+  if(first){unsubscribe();st.eventId=id;st.event=null;st.matchId=null;st.tab='match';st.adminTab='roster';st.view=ADMIN_MODE?'admin-event':'event';show()}
+  st.loading=true;
+  try{
+    const [t,teams,slots,matches]=await Promise.all([
+      c.from('tournaments').select('id,organizer_id,name,format,status,created_at,is_open').eq('id',id).single(),
+      c.from('teams').select('id,tournament_id,seed,name').eq('tournament_id',id).order('seed'),
+      c.from('player_slots').select('id,tournament_id,team_id,position,display_name,profile_id,preferred_weapon').eq('tournament_id',id),
+      c.from('matches').select('id,tournament_id,round_index,match_index,team_a_id,team_b_id,status,winner_id,next_match_id,advance_to_side').eq('tournament_id',id).order('round_index').order('match_index')
+    ]);
+    for(const v of [t,teams,slots,matches])check(v);
+    const data={tournament:t.data,teams:teams.data||[],slots:slots.data||[],matches:matches.data||[],profiles:[]};
+    const pids=[...new Set(data.slots.map(s=>s.profile_id).filter(Boolean))];
+    if(pids.length)data.profiles=check(await c.from('profiles').select('id,nickname,color').in('id',pids))||[];
+    if(!ADMIN_MODE&&st.pending.length){
+      const events=st.pending.filter(x=>x.uid===st.user?.id).map(x=>x.eventId).slice(0,200);
+      if(events.length){const ack=check(await c.from('death_events').select('event_id').in('event_id',events));const done=new Set((ack||[]).map(x=>x.event_id));if(done.size){st.pending=st.pending.filter(x=>!done.has(x.eventId));savePending()}}
+    }
+    if(st.eventId!==id)return;
+    st.event=data;let selected=data.matches.find(m=>m.id===st.matchId);if(!selected)selected=pickEventDefault(data);st.matchId=selected?.id||null;
+    st.matchPlayers=[];
+    if(selected&&selected.status!=='pending')st.matchPlayers=check(await c.from('match_players').select('match_id,slot_id,weapon_name,base_stock,deaths,updated_at').eq('match_id',selected.id))||[];
+    show();if(first)subscribe(id);
+  }catch(e){console.error(e);notify('大会を読み込めません：'+e.message,true);if(first){if(ADMIN_MODE)await loadAdminHome();else await loadPlayerHome()}}
+  finally{st.loading=false}
+  if(!ADMIN_MODE)await drain();
+}
+function unsubscribe(){if(st.channel){client()?.removeChannel(st.channel);st.channel=null}if(st.refreshTimer){clearTimeout(st.refreshTimer);st.refreshTimer=null}st.realtime='disconnected'}
+function refreshSoon(){if(!st.eventId||!['event','admin-event'].includes(st.view))return;
+  // Do not destroy admin's unsubmitted roster edits while a background update arrives.
+  if(ADMIN_MODE&&st.adminTab==='roster')return;
+  clearTimeout(st.refreshTimer);st.refreshTimer=setTimeout(()=>{if(st.loading)refreshSoon();else loadEvent(st.eventId)},350)
+}
+function subscribe(id){unsubscribe();const c=client();const ch=c.channel('splastock-v2-'+id+'-'+uuid().slice(0,8));
+  for(const table of ['matches','player_slots','match_players','teams'])ch.on('postgres_changes',{event:'*',schema:'public',table,filter:`tournament_id=eq.${id}`},refreshSoon);
+  ch.on('postgres_changes',{event:'*',schema:'public',table:'tournaments',filter:`id=eq.${id}`},refreshSoon);
+  ch.on('postgres_changes',{event:'*',schema:'public',table:'profiles'},refreshSoon);
+  ch.subscribe(status=>{st.realtime=status;statusHeader();if(status==='SUBSCRIBED')refreshSoon()});st.channel=ch;
+}
+async function playerInit(){if(!configured){st.view='home';show();return}
   const {createClient}=await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
-  state.client=createClient(cfg.supabaseUrl.replace(/\/$/,''),cfg.supabasePublishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
-  await initializeSession();
- }catch(e){console.error(e);state.error=e.message||'起動に失敗しました';renderError();}
+  st.playerClient=createClient(config.supabaseUrl,config.supabasePublishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
+  let session=check(await st.playerClient.auth.getSession()).session;
+  if(!session)session=check(await st.playerClient.auth.signInAnonymously()).session;
+  if(!session?.user)throw new Error('匿名セッションを作成できません。Supabase Authで匿名認証を有効にしてください。');
+  st.user=session.user;
+  st.profile=check(await st.playerClient.from('profiles').select('id,nickname,color').eq('id',st.user.id).maybeSingle());
+  await loadPlayerHome();
 }
-async function initializeSession(){
- state.error=null;
- const {data,error}=await state.client.auth.getSession();check(data,error);
- let session=data.session;
- if(!session){const res=await state.client.auth.signInAnonymously();check(res.data,res.error);session=res.data.session;}
- if(!session?.user)throw new Error('匿名アカウントを作成できませんでした。Supabaseで匿名認証をONにしてください。');
- state.user=session.user;
- const res=await state.client.from('profiles').select('id,nickname,avatar,color').eq('id',state.user.id).maybeSingle();check(res.data,res.error);
- state.profile=res.data;
- if(!state.profile){state.view='profile';render();return;}
- if(getInviteFromUrl()){const tid=await claimInvite(getInviteFromUrl(),true);if(tid){await loadTournament(tid,true);return;}}
- await loadHome();
+async function adminInit(){if(!configured){st.view='admin-login';st.bootError='config.jsのSupabase公開設定がありません';show();return}
+  const {createClient}=await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+  st.adminClient=createClient(config.supabaseUrl,config.supabasePublishableKey,{auth:{storageKey:'splastock_admin_auth_v2',persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+  const session=check(await st.adminClient.auth.getSession()).session;
+  st.adminUser=session?.user||null;
+  if(!st.adminUser){st.view='admin-login';show();return}
+  st.isAdmin=await rpc('is_app_admin',{},st.adminClient);
+  if(!st.isAdmin){st.view='admin-login';show();notify('このメールアドレスは運営者に許可されていません。管理者設定を確認してください。',true);return}
+  await loadAdminHome();
 }
-async function loadHome(){
- unsubscribe();state.view='home';state.tournamentId=null;state.detail=null;state.matchId=null;
- const res=await state.client.from('tournaments').select('id,organizer_id,name,format,status,created_at').order('created_at',{ascending:false});check(res.data,res.error);
- state.tournaments=res.data||[];render();
-}
-async function claimInvite(token,fromUrl=false){
- try{const tid=await callRpc('claim_invite',{p_token:token});if(fromUrl)removeInviteFromUrl();toast('チームに参加しました！');state.tournamentId=tid;return tid;}
- catch(err){if(fromUrl){removeInviteFromUrl();toast('招待リンクを使えません：'+err.message,true);}else throw err;return null;}
-}
-async function loadTournament(id,first=false){
- if(first){unsubscribe();state.tab='match';state.invites=null;state.view='tournament';state.tournamentId=id;state.detail=null;state.matchId=null;render();}
- if(state.refreshing)return;
- state.refreshing=true;
- try{
- const c=state.client;
- const [t,teams,slots,matches]=await Promise.all([
-  c.from('tournaments').select('id,organizer_id,name,format,status,created_at').eq('id',id).single(),
-  c.from('teams').select('id,tournament_id,seed,name').eq('tournament_id',id).order('seed'),
-  c.from('player_slots').select('id,tournament_id,team_id,position,profile_id,preferred_weapon').eq('tournament_id',id),
-  c.from('matches').select('id,tournament_id,round_index,match_index,team_a_id,team_b_id,status,winner_id,next_match_id,advance_to_side,started_at,finished_at').eq('tournament_id',id).order('round_index').order('match_index')
- ]);
- for(const r of [t,teams,slots,matches])check(r.data,r.error);
- const profileIds=[...new Set((slots.data||[]).map(x=>x.profile_id).filter(Boolean))];
- let profiles=[];
- if(profileIds.length){const r=await c.from('profiles').select('id,nickname,avatar,color').in('id',profileIds);profiles=check(r.data,r.error)||[];}
- let allMatches=matches.data||[], selected=allMatches.find(m=>m.id===state.matchId);
- if(!selected){const ownTeam=(slots.data||[]).find(s=>s.profile_id===state.user.id)?.team_id;
- selected=allMatches.find(m=>m.status==='live'&&(m.team_a_id===ownTeam||m.team_b_id===ownTeam))
- || allMatches.find(m=>m.status==='live')
- || allMatches.find(m=>m.status==='pending' && m.team_a_id&&m.team_b_id && (m.team_a_id===ownTeam||m.team_b_id===ownTeam))
- || allMatches.find(m=>m.status==='pending'&&m.team_a_id&&m.team_b_id)
- || allMatches[0];
- }
- // サーバーに確定済みのイベントは、通信応答を失った場合でもキューから除外。
- const unconfirmed=state.pending.filter(x=>x.uid===state.user?.id).map(x=>x.eventId);
- if(unconfirmed.length){
-   const acknowledgements=await c.from('death_events').select('event_id').in('event_id',unconfirmed.slice(0,200));
-   check(acknowledgements.data,acknowledgements.error);
-   const applied=new Set((acknowledgements.data||[]).map(e=>e.event_id));
-   if(applied.size){state.pending=state.pending.filter(e=>!applied.has(e.eventId));savePending();}
- }
- let matchPlayers=[];
- if(selected&&selected.status!=='pending'){
-  const r=await c.from('match_players').select('match_id,slot_id,tournament_id,weapon_name,base_stock,deaths,updated_at').eq('match_id',selected.id);
-  matchPlayers=check(r.data,r.error)||[];
- }
- if(state.tournamentId!==id)return;
- state.detail={tournament:t.data,teams:teams.data||[],slots:slots.data||[],matches:allMatches,profiles};
- state.matchId=selected?.id||null;
- state.matchPlayers=matchPlayers;
- state.view='tournament';render();
- if(first)subscribe(id);
- await drainQueue();
- }catch(err){console.error(err);toast('大会を読み込めません：'+err.message,true);if(first){state.view='home';await loadHome();}}
- finally{state.refreshing=false;}
-}
-function unsubscribe(){if(state.channel){state.client?.removeChannel(state.channel);state.channel=null;}state.realtimeStatus='disconnected';if(state.refreshTimer){clearTimeout(state.refreshTimer);state.refreshTimer=null;}}
-function scheduleRefresh(){if(state.view!=='tournament'||!state.tournamentId)return;clearTimeout(state.refreshTimer);state.refreshTimer=setTimeout(()=>{if(!state.refreshing)loadTournament(state.tournamentId);else scheduleRefresh();},320);}
-function subscribe(id){unsubscribe();const c=state.client,ch=c.channel('splastock-'+id+'-'+UUID().slice(0,8));
- for(const tbl of ['matches','player_slots','match_players']){
-   ch.on('postgres_changes',{event:'*',schema:'public',table:tbl,filter:`tournament_id=eq.${id}`},scheduleRefresh);
- }
- ch.on('postgres_changes',{event:'*',schema:'public',table:'tournaments',filter:`id=eq.${id}`},scheduleRefresh);
- // プロフィール変更は稀なので、対戦画面を開き直したときにも取得する。
- ch.subscribe(status=>{state.realtimeStatus=status;renderHeader();if(status==='SUBSCRIBED')scheduleRefresh();});state.channel=ch;
-}
-async function updateProfile(form){
- const name=(new FormData(form).get('nickname')||'').trim();if(name.length<1||name.length>24)throw new Error('名前は1～24文字にしてください');
- const obj={id:state.user.id,nickname:name,avatar:state.avatar,color:state.color,updated_at:new Date().toISOString()};
- const {data,error}=await state.client.from('profiles').upsert(obj).select('id,nickname,avatar,color').single();check(data,error);
- state.profile=data;state.nameDraft='';toast('アバターを保存しました');
- if(getInviteFromUrl()){const tid=await claimInvite(getInviteFromUrl(),true);if(tid){await loadTournament(tid,true);return;}}
- await loadHome();
-}
-async function createEvent(form){const f=new FormData(form),teams=String(f.get('teams')||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
- if(teams.length<2||teams.length>16)throw new Error('2～16チームの名前を改行して入力してください');
- if(new Set(teams).size!==teams.length)throw new Error('同じチーム名が重複しています');
- const id=await callRpc('create_tournament',{p_name:String(f.get('eventname')),p_format:String(f.get('format')),p_team_names:teams});toast('大会と選手枠を作成しました！');await loadTournament(id,true);state.tab='admin';render();}
-async function changeWeapon(name){if(!name)return;const t=state.detail?.tournament;if(!t)return;
- const old=state.detail.slots.find(s=>s.profile_id===state.user.id)?.preferred_weapon;
- try{await callRpc('set_player_weapon',{p_tournament:t.id,p_weapon:name});rememberWeapon(name);toast(`${name}に変更しました`);await loadTournament(t.id);}
- catch(e){toast('ブキ変更不可：'+e.message,true);await loadTournament(t.id);}}
-function canAddDeath(delta){const match=chosenMatch(),slot=playerSlotFor(state.tournamentId);if(!match||!slot||match.status!=='live')throw new Error('試合中のみデスを記録できます');
- const mp=state.matchPlayers.find(x=>x.slot_id===slot.id);if(!mp||!mp.base_stock)throw new Error('使用ブキを選択してください');
- const existing=currentDeaths(mp,slot,match).deaths;const after=existing+delta;
- if(after<0||after>mp.base_stock)throw new Error('デス数の範囲外です');return match;}
-async function addDeath(delta){const match=canAddDeath(delta);
- const item={eventId:UUID(),matchId:match.id,uid:state.user.id,delta,createdAt:Date.now()};
- state.pending.push(item);savePending();render();await drainQueue();}
-async function drainQueue(){
- if(!configured||!state.client||!state.user||state.draining||!navigator.onLine)return;
- state.draining=true;
- const blockedMatches=new Set();
- try{
-   while(true){const action=state.pending.find(e=>e.uid===state.user.id&&!blockedMatches.has(e.matchId));
-     if(!action)break;
-     let saved;
-     try{saved=await callRpc('record_death',{p_match:action.matchId,p_event:action.eventId,p_delta:action.delta});}
-     catch(e){console.warn('Unsent action retained',action,e);blockedMatches.add(action.matchId);if(state.view==='tournament'&&state.matchId===action.matchId)toast('未同期の記録があります。接続と試合状態を確認してください：'+e.message,true);continue;}
-     const mp=state.matchPlayers.find(x=>x.match_id===action.matchId&&state.detail?.slots.some(s=>s.id===x.slot_id&&s.profile_id===state.user.id));
-     if(mp)mp.deaths=Number(saved);
-     state.pending=state.pending.filter(e=>e.eventId!==action.eventId);savePending();render();
-   }
- }finally{state.draining=false;if(state.tournamentId&&state.view==='tournament')scheduleRefresh();}
-}
-async function ensureWake(){if(!state.wakeEnabled)return;try{if('wakeLock' in navigator&&document.visibilityState==='visible'&&!state.wakeLock){state.wakeLock=await navigator.wakeLock.request('screen');state.wakeLock.addEventListener('release',()=>state.wakeLock=null);}}catch(e){toast('画面消灯防止が使えません：'+e.message,true);state.wakeEnabled=false;}}
-async function toggleWake(){if(state.wakeEnabled){state.wakeEnabled=false;try{await state.wakeLock?.release();}catch{}state.wakeLock=null;toast('画面消灯防止を解除');}
- else{if(!('wakeLock' in navigator)){toast('このブラウザは画面消灯防止に対応していません',true);return;}state.wakeEnabled=true;await ensureWake();if(state.wakeEnabled)toast('画面消灯防止を有効化');}
- render();}
-function confirmAction(message,callback,title='確認'){const dlg=document.getElementById('confirm-dialog');document.getElementById('confirm-body').innerHTML=`<h2>${esc(title)}</h2><p class="subline">${esc(message)}</p>`;
- const handler=()=>{dlg.removeEventListener('close',handler);if(dlg.returnValue==='confirm')runBusy(callback);};dlg.addEventListener('close',handler);dlg.showModal();}
-async function copyText(value){try{await navigator.clipboard.writeText(value);toast('コピーしました');}catch{toast('コピーできませんでした。HTTPS環境でお試しください',true);}}
-function showScheduleConfirm(){confirmAction('対戦表を生成すると形式やチーム数は変更できなくなります。よろしいですか？',async()=>{const count=await callRpc('generate_schedule',{p_tournament:state.tournamentId});toast(`${count}試合分の対戦表を生成しました`);state.tab='schedule';await loadTournament(state.tournamentId);},'対戦表を作成');}
-async function beginMatch(id){const m=state.detail.matches.find(m=>m.id===id);if(!m)return;confirmAction(`${nameOfTeam(m.team_a_id)} vs ${nameOfTeam(m.team_b_id)} の試合を開始します。未選択の選手は初デス前までブキを選べます。`,async()=>{await callRpc('start_match',{p_match:id});toast('試合を開始しました！');await loadTournament(state.tournamentId);},'試合を開始');}
-function finishDialog(id){const m=state.detail.matches.find(x=>x.id===id);if(!m)return;const dlg=document.getElementById('confirm-dialog'),body=document.getElementById('confirm-body');body.innerHTML=`<h2>勝利チームを選択</h2><p class="small muted">実際の試合結果を確認してください。確定すると勝者が次ラウンドへ進みます。元に戻す機能はありません。</p><div class="winner-buttons"><button type="button" class="btn btn-outline" data-action="commit-winner" data-match="${m.id}" data-team="${m.team_a_id}">${esc(nameOfTeam(m.team_a_id))}</button><button type="button" class="btn btn-outline" data-action="commit-winner" data-match="${m.id}" data-team="${m.team_b_id}">${esc(nameOfTeam(m.team_b_id))}</button></div>`;dlg.showModal();}
-function handleSolo(action){const w=state.weaponMap.get(state.solo.weapon)||state.weapons[0];if(action==='solo-death')state.solo.deaths=Math.min(w.stock,state.solo.deaths+1);if(action==='solo-undo')state.solo.deaths=Math.max(0,state.solo.deaths-1);if(action==='solo-reset')state.solo.deaths=0;saveSolo();render();}
-document.addEventListener('click',async e=>{
- const btn=e.target.closest('[data-action]');if(!btn||btn.disabled)return;
- const action=btn.dataset.action;
- try{
- switch(action){
- case 'home':if(state.profile){await runBusy(loadHome);}else{state.view=configured?'profile':'solo';render();}break;
- case 'solo':state.view='solo';render();break;
- case 'retry':await runBusy(initializeSession);break;
- case 'edit-profile':state.avatar=state.profile.avatar;state.color=state.profile.color;state.nameDraft=state.profile.nickname;state.view='profile';render();break;
- case 'avatar':state.nameDraft=document.getElementById('nickname')?.value||'';state.avatar=btn.dataset.value;render();break;
- case 'color':state.nameDraft=document.getElementById('nickname')?.value||'';state.color=btn.dataset.value;render();break;
- case 'scroll-create':document.getElementById('create-section')?.scrollIntoView({behavior:'smooth',block:'start'});break;
- case 'open-event':await runBusy(()=>loadTournament(btn.dataset.id,true));break;
- case 'tab':state.tab=btn.dataset.value;render();break;
- case 'select-match':state.matchId=btn.dataset.id;state.tab='match';await runBusy(()=>loadTournament(state.tournamentId));break;
- case 'solo-death':case 'solo-undo':case 'solo-reset':handleSolo(action);break;
- case 'quick-weapon':await runBusy(()=>changeWeapon(btn.dataset.value));break;
- case 'death':case 'undo':await addDeath(action==='death'?1:-1);break;
- case 'wake':await toggleWake();break;
- case 'retry-sync':await drainQueue();break;
- case 'clear-pending':{
-   const count=pendingFor(state.matchId).length;
-   confirmAction(`${count}件の未同期の操作を破棄します。同期されなかったデスはサーバーに反映されません。主催者に申告してから操作してください。`,async()=>{state.pending=state.pending.filter(x=>x.matchId!==state.matchId||x.uid!==state.user.id);savePending();toast('未同期の操作を破棄しました');render();},'未同期の記録を破棄');break;
- }
- case 'issue-invites':await runBusy(async()=>{state.invites=await callRpc('issue_invites',{p_tournament:state.tournamentId});render();toast('未登録枠のリンクを発行しました');});break;
- case 'copy-invite':if(state.invites?.[Number(btn.dataset.index)])await copyText(inviteLink(state.invites[Number(btn.dataset.index)].invite_token));break;
- case 'copy-all-invites':if(state.invites)await copyText(state.invites.map(i=>`${i.team_name} ${i.slot_position}番: ${inviteLink(i.invite_token)}`).join('\n'));break;
- case 'generate':showScheduleConfirm();break;
- case 'start-match':beginMatch(btn.dataset.id);break;
- case 'finish-dialog':finishDialog(btn.dataset.id);break;
- case 'commit-winner':{
-   const matchId=btn.dataset.match,teamId=btn.dataset.team;document.getElementById('confirm-dialog').close();
-   confirmAction(`${nameOfTeam(teamId)} の勝利を確定します。取り消しできません。`,async()=>{await callRpc('finish_match',{p_match:matchId,p_winner:teamId});toast('試合結果を確定しました');state.matchId=null;await loadTournament(state.tournamentId);},'結果を確定');break;
- }
- }
- }catch(err){console.error(err);toast(err.message||String(err),true);}
+async function boot(){try{
+  const r=await fetch('./weapons.json',{cache:'no-cache'});if(!r.ok)throw new Error('weapons.json を読み込めません');
+  const arr=await r.json();if(!Array.isArray(arr)||arr.length!==65||new Set(arr.map(x=>x.name)).size!==65||arr.some(x=>!Number.isInteger(x.stock)||x.stock<1||x.stock>9))throw new Error('65種類のブキマスターに欠損・重複があります');
+  st.weapons=arr;st.weaponMap=new Map(arr.map(x=>[x.name,x]));if(!st.weaponMap.has(st.quick.weapon))st.quick.weapon=arr[0].name;
+  show();if(ADMIN_MODE)await adminInit();else await playerInit();
+  }catch(e){console.error(e);st.bootError=e.message;show()}}
+async function saveColor(){if(!st.profile)return;const color=st.claimColor;check(await st.playerClient.from('profiles').update({color,updated_at:new Date().toISOString()}).eq('id',st.user.id));st.profile.color=color;notify('カラーを変更しました');show()}
+async function setWeapon(name){if(!name||!st.weaponMap.has(name))throw new Error('ブキ一覧から選択してください');await rpc('set_player_weapon',{p_tournament:st.eventId,p_weapon:name},st.playerClient);rememberWeapon(name);notify('ブキを保存しました');await loadEvent(st.eventId)}
+function canDeath(delta){const m=currMatch(),slot=mySlot();if(!m||m.status!=='live'||!matchOfMe(m))throw new Error('試合中のみ記録できます');const mp=st.matchPlayers.find(x=>x.slot_id===slot.id);if(!mp||mp.base_stock===null)throw new Error('ブキを登録してください');const count=matchScore(mp,slot,m).deaths;if(count+delta<0||count+delta>mp.base_stock)throw new Error('デス数の範囲外です');return m}
+async function addDeath(delta){const m=canDeath(delta);st.pending.push({eventId:uuid(),matchId:m.id,uid:st.user.id,delta,createdAt:Date.now()});savePending();show();await drain()}
+async function drain(){if(ADMIN_MODE||!st.playerClient||!st.user||st.draining||!navigator.onLine)return;st.draining=true;const blocked=new Set();
+  try{while(true){const item=st.pending.find(x=>x.uid===st.user.id&&!blocked.has(x.matchId));if(!item)break;
+    let saved;try{saved=await rpc('record_death',{p_match:item.matchId,p_event:item.eventId,p_delta:item.delta},st.playerClient)}catch(e){blocked.add(item.matchId);console.warn('未同期のデスを保持',e);if(st.matchId===item.matchId)notify('未同期の記録を保持中：'+e.message,true);continue}
+    const mp=st.matchPlayers.find(x=>x.match_id===item.matchId&&st.event?.slots.some(s=>s.id===x.slot_id&&s.profile_id===st.user.id));if(mp)mp.deaths=Number(saved);
+    st.pending=st.pending.filter(x=>x.eventId!==item.eventId);savePending();if(st.view==='event')show();
+  }}finally{st.draining=false;if(st.view==='event')refreshSoon()}}
+async function ensureWake(){if(!st.wakeEnabled||!('wakeLock' in navigator)||document.visibilityState!=='visible'||st.wakeLock)return;try{st.wakeLock=await navigator.wakeLock.request('screen');st.wakeLock.addEventListener('release',()=>st.wakeLock=null)}catch(e){st.wakeEnabled=false;notify('画面消灯防止が利用できません',true)}}
+async function toggleWake(){if(st.wakeEnabled){st.wakeEnabled=false;try{await st.wakeLock?.release()}catch{}st.wakeLock=null}else{if(!('wakeLock' in navigator)){notify('この端末では利用できません',true);return}st.wakeEnabled=true;await ensureWake()}show()}
+function confirmBox(title,message,cb){const dialog=document.getElementById('confirm-dialog');document.getElementById('dialog-body').innerHTML=`<h2 id="dialog-title">${esc(title)}</h2><p class="sub">${esc(message)}</p>`;const f=()=>{dialog.removeEventListener('close',f);if(dialog.returnValue==='confirm')run(cb)};dialog.addEventListener('close',f);dialog.showModal()}
+function chooseWinner(m){const dialog=document.getElementById('confirm-dialog');document.getElementById('dialog-body').innerHTML=`<h2 id="dialog-title">勝者を選択</h2><p class="sub">実際の試合結果を確認してから確定してください。取り消し機能はありません。</p><div class="stack">${[m.team_a_id,m.team_b_id].map(t=>`<button type="button" class="btn btn-secondary btn-block" data-action="admin-confirm-winner" data-id="${m.id}" data-team="${t}">${esc(teamName(t))} が勝利</button>`).join('')}</div>`;dialog.showModal()}
+function clearPending(){const count=pendingFor(st.matchId).length;confirmBox('未同期デスを破棄',`${count}件の未同期記録を削除します。未送信のデスは共有されなくなります。運営者に伝えてから行ってください。`,async()=>{st.pending=st.pending.filter(x=>x.uid!==st.user.id||x.matchId!==st.matchId);savePending();show()})}
+async function copy(text){try{await navigator.clipboard.writeText(text);notify('IDをコピーしました')}catch{notify('コピーに失敗しました',true)}}
+async function goHome(){unsubscribe();if(ADMIN_MODE){if(st.isAdmin)await loadAdminHome();else{st.view='admin-login';show()}}else await loadPlayerHome()}
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b||b.disabled)return;const a=b.dataset.action;
+  try{switch(a){
+    case 'home':await run(goHome);break;
+    case 'quick':st.view='quick';show();break;
+    case 'scroll-events':document.getElementById('events-section')?.scrollIntoView({behavior:'smooth'});break;
+    case 'retry':st.bootError=null;await boot();break;
+    case 'quick-death':{const w=st.weaponMap.get(st.quick.weapon);st.quick.deaths=Math.min(w.stock,st.quick.deaths+1);saveQuick();show();break}
+    case 'quick-undo':st.quick.deaths=Math.max(0,st.quick.deaths-1);saveQuick();show();break;
+    case 'quick-reset':st.quick.deaths=0;saveQuick();show();break;
+    case 'open-claim':await run(()=>loadClaimRoster(b.dataset.id));break;
+    case 'pick-color':st.claimColor=b.dataset.color;show();break;
+    case 'claim-slot':await run(async()=>{const tid=await rpc('claim_named_slot',{p_slot:b.dataset.id,p_color:st.claimColor},st.playerClient);st.profile=check(await st.playerClient.from('profiles').select('id,nickname,color').eq('id',st.user.id).single());notify('参加登録が完了しました');await loadEvent(tid,true)});break;
+    case 'open-event':await run(()=>loadEvent(b.dataset.id,true));break;
+    case 'pick-match':st.matchId=b.dataset.id;if(!ADMIN_MODE)st.tab='match';else st.adminTab='matches';await run(()=>loadEvent(st.eventId));break;
+    case 'player-tab':st.tab=b.dataset.tab;show();break;
+    case 'admin-tab':st.adminTab=b.dataset.tab;show();if(st.adminTab!=='roster')refreshSoon();break;
+    case 'recent-weapon':await run(()=>setWeapon(b.dataset.weapon));break;
+    case 'death':await addDeath(1);break;
+    case 'undo':await addDeath(-1);break;
+    case 'wake':await toggleWake();break;
+    case 'retry-sync':await drain();break;
+    case 'clear-pending':clearPending();break;
+    case 'change-color':st.claimColor=st.profile?.color||COLORS[0];st.view='color';show();break;
+    case 'save-color':await run(async()=>{await saveColor();st.view='event';show()});break;
+    case 'back-event':st.view='event';show();break;
+    case 'admin-logout':await run(async()=>{check(await st.adminClient.auth.signOut());st.adminUser=null;st.isAdmin=false;st.view='admin-login';show()});break;
+    case 'admin-open-event':{
+      const summary=st.adminEvents.find(x=>x.id===b.dataset.id);
+      if(summary?.organizer_id!==st.adminUser?.id){
+        confirmBox('旧大会を引き継ぐ','旧主催者の大会をこの運営者アカウントに移管します。大会・選手・勝敗データは残ります。',async()=>{await rpc('admin_adopt_tournament',{p_tournament:b.dataset.id});await loadEvent(b.dataset.id,true);notify('旧大会を引き継ぎました')});
+      }else await run(()=>loadEvent(b.dataset.id,true));
+      break;
+    }
+    case 'admin-adopt':confirmBox('旧大会を移管','この大会の運営者を現在ログイン中の管理者に変更します。',async()=>{await rpc('admin_adopt_tournament',{p_tournament:st.eventId});await loadEvent(st.eventId);notify('移管しました')});break;
+    case 'admin-toggle-open':confirmBox('参加受付の変更',st.event.tournament.is_open?'参加受付を停止します。既存の参加者の試合データは維持されます。':'全選手の名前が入力されている必要があります。受付を開始しますか？',async()=>{await rpc('admin_set_open',{p_tournament:st.eventId,p_open:!st.event.tournament.is_open});await loadEvent(st.eventId);notify('受付状態を変更しました')});break;
+    case 'admin-generate':confirmBox('対戦表を生成','作成後は大会形式を変更できません。選手の割り当ては試合開始前なら修正可能です。',async()=>{const n=await rpc('admin_generate_schedule',{p_tournament:st.eventId});notify(`${n}試合の対戦表を作成しました`);st.adminTab='matches';await loadEvent(st.eventId)});break;
+    case 'admin-start-match':confirmBox('試合開始','使用ブキと初期ストックを保存して試合を開始します。未選択の選手は初デス前までブキを選べます。',async()=>{await rpc('admin_start_match',{p_match:b.dataset.id});await loadEvent(st.eventId);notify('試合を開始しました')});break;
+    case 'admin-finish-match':{const m=st.event.matches.find(x=>x.id===b.dataset.id);if(m)chooseWinner(m);break}
+    case 'admin-confirm-winner':{document.getElementById('confirm-dialog').close();const team=b.dataset.team,match=b.dataset.id;confirmBox('勝敗を確定',`${teamName(team)}の勝利として確定します。戻す機能はありません。`,async()=>{await rpc('admin_finish_match',{p_match:match,p_winner:team});notify('勝敗を確定しました');st.matchId=null;await loadEvent(st.eventId)});break}
+    case 'copy-id':await copy(b.dataset.id);break;
+    case 'admin-move':{const from=b.dataset.id,to=document.getElementById('move-'+from)?.value;const s=st.event.slots.find(x=>x.id===from),dest=st.event.slots.find(x=>x.id===to);if(!dest)return;confirmBox('選手の割り当て修正',`${s.display_name} のアカウントを ${dest.display_name} に移動します。移動先が登録済みなら2人のアカウントを交換します。`,async()=>{await rpc('admin_move_player',{p_from:from,p_to:to});notify('割り当てを修正しました');await loadEvent(st.eventId)});break}
+    case 'admin-release':{const s=st.event.slots.find(x=>x.id===b.dataset.id);confirmBox('登録を解除',`${s.display_name} の登録を解除します。同じ人は再度名前を選んで参加できます。`,async()=>{await rpc('admin_release_player',{p_slot:b.dataset.id});notify('登録を解除しました');await loadEvent(st.eventId)});break}
+  }}catch(ex){console.error(ex);notify(ex.message||ex,true)}
 });
-document.addEventListener('submit',async e=>{const form=e.target;if(!['profile-form','create-form','claim-form'].includes(form.id))return;e.preventDefault();
- await runBusy(async()=>{if(form.id==='profile-form')return updateProfile(form);if(form.id==='create-form')return createEvent(form);if(form.id==='claim-form'){
-  const token=String(new FormData(form).get('inviteCode')||'').trim();if(!/^[0-9a-fA-F-]{36}$/.test(token))throw new Error('正しい招待コードを入力してください');const tid=await claimInvite(token);if(tid)await loadTournament(tid,true);
- }});
+document.addEventListener('input',e=>{
+  const type=e.target.dataset.weaponFilter;
+  if(!type)return;
+  const target=document.getElementById(type==='quick'?'quick-weapon':'match-weapon');
+  if(!target)return;
+  const before=target.value;
+  const q=e.target.value.trim().toLocaleLowerCase('ja-JP');
+  const options=st.weapons.filter(w=>w.name.toLocaleLowerCase('ja-JP').includes(q)||w.name===before);
+  target.innerHTML=(type==='match'?'<option value="">ブキを選択</option>':'')+options.map(w=>`<option value="${esc(w.name)}">${esc(w.name)} — ${w.stock}</option>`).join('');
+  target.value=before;
 });
-document.addEventListener('change',async e=>{const target=e.target;
- if(target.dataset.change==='solo-weapon'){state.solo.weapon=target.value;state.solo.deaths=0;rememberWeapon(target.value);saveSolo();render();}
- if(target.dataset.change==='set-weapon')await runBusy(()=>changeWeapon(target.value));
+document.addEventListener('change',async e=>{const x=e.target;
+  if(x.dataset.change==='quick-weapon'){if(!st.weaponMap.has(x.value))return;st.quick.weapon=x.value;st.quick.deaths=0;rememberWeapon(x.value);saveQuick();show()}
+  if(x.dataset.change==='match-weapon')await run(()=>setWeapon(x.value));
 });
-window.addEventListener('online',()=>{renderHeader();drainQueue();scheduleRefresh();});
-window.addEventListener('offline',()=>{renderHeader();if(state.view==='tournament')render();});
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){ensureWake();if(state.view==='tournament')scheduleRefresh();drainQueue();}});
-// Realtime が一時的に途切れても15秒ごとに整合性を再確認。
-setInterval(()=>{if(state.view==='tournament'&&navigator.onLine&&!state.refreshing)scheduleRefresh();},15000);
+document.addEventListener('submit',async e=>{const f=e.target;if(!['admin-login-form','admin-create-form','admin-rebind-form'].includes(f.id) && f.dataset.form!=='roster')return;e.preventDefault();
+  if(f.id==='admin-login-form')await run(async()=>{const email=String(new FormData(f).get('email')||'').trim();const redirect=location.origin+location.pathname+'?admin=1';check(await st.adminClient.auth.signInWithOtp({email,options:{emailRedirectTo:redirect,shouldCreateUser:true}}));notify('ログイン用メールを送信しました。メール内のリンクを開いてください。')});
+  if(f.id==='admin-create-form')await run(async()=>{const p=new FormData(f),teams=String(p.get('teams')||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);if(teams.length<2||teams.length>16)throw new Error('チーム数は2～16です');if(new Set(teams.map(x=>x.toLowerCase())).size!==teams.length)throw new Error('同じチーム名があります');const id=await rpc('admin_create_tournament',{p_name:String(p.get('name')||''),p_format:String(p.get('format')),p_team_names:teams});notify('大会を作成しました');await loadEvent(id,true)});
+  if(f.id==='admin-rebind-form'){
+    const values=new FormData(f),slot=String(values.get('slot')||''),user=String(values.get('user')||'').trim();
+    if(!/^[a-f0-9-]{36}$/i.test(user)){notify('個人IDの形式が正しくありません',true);return}
+    const slotData=st.event.slots.find(x=>x.id===slot);
+    confirmBox('端末IDを再接続',`${slotData?.display_name||'選手'} の操作権限を新しい個人IDへ変更します。元の端末に残る未同期デスがある場合、反映できなくなるので先に確認してください。`,async()=>{
+      await rpc('admin_rebind_player',{p_slot:slot,p_new_user:user});notify('新しいIDへ再接続しました');await loadEvent(st.eventId)
+    });
+  }
+  if(f.dataset.form==='roster')await run(async()=>{const p=new FormData(f),tid=f.dataset.team,names=[1,2,3,4].map(n=>String(p.get('player'+n)||'').trim());if(names.some(n=>!n||n.length>24))throw new Error('4名全員の名前を1～24文字で入力してください');const teamNameInput=String(p.get('teamName')||'').trim();await rpc('admin_save_team',{p_team:tid,p_name:teamNameInput,p_names:names});notify('このチームを保存しました');await loadEvent(st.eventId)});
+});
+window.addEventListener('online',()=>{statusHeader();drain();refreshSoon()});
+window.addEventListener('offline',()=>{statusHeader();if(st.view==='event')show()});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){ensureWake();drain();refreshSoon()}});
+setInterval(()=>{if(st.view==='event'&&navigator.onLine&&!st.loading)refreshSoon();if(st.view==='admin-event'&&st.adminTab!=='roster'&&!st.loading)refreshSoon()},15000);
 boot();
