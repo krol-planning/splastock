@@ -42,3 +42,8 @@
  .test-match-actions .between{align-items:stretch}
  .test-match-actions .btn{width:100%}
 }
+
+/* V4 password sign-in */
+.admin-login .notice{line-height:1.75}
+.admin-login form .field{min-height:47px}
+@media(max-width:460px){.header-right [data-action='admin-password']{font-size:10px;padding:6px 7px}.admin-login{margin:16px auto}}
